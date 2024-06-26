@@ -114,4 +114,20 @@ IActor* TTableTarget::CreateWorkerRegistar(const TActorContext& ctx) const {
         CanonizePath(ChildPath(SplitPath(GetSrcPath()), GetStreamName())), GetDstPathId());
 }
 
+TSyncIndexTarget::TSyncIndexTarget(TReplication* replication, ui64 id, const TString& srcPath, const TString& dstPath)
+    : TTargetBase(replication, ETargetKind::GlobalSyncIndex, id, srcPath, dstPath)
+{
+}
+
+void TSyncIndexTarget::Progress(const TActorContext&) {
+    Cerr << "TSyncIndexTarget::Progress " << GetStreamState() << " " << GetDstState()  << Endl;
+}
+
+IActor* TSyncIndexTarget::CreateWorkerRegistar(const TActorContext& ctx) const {
+    auto replication = GetReplication();
+    return new TTableWorkerRegistar(ctx.SelfID, replication->GetYdbProxy(),
+        replication->GetConfig().GetSrcConnectionParams(), replication->GetId(), GetId(),
+        CanonizePath(ChildPath(SplitPath(GetSrcPath()), GetStreamName())), GetDstPathId());
+}
+
 }

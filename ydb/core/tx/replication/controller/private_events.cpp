@@ -166,7 +166,13 @@ TString TEvPrivate::TEvRemoveWorker::ToString() const {
 }
 
 Y_DECLARE_OUT_SPEC(, NKikimr::NReplication::NController::TEvPrivate::TEvDiscoveryTargetsResult::TAddEntry, stream, value) {
-    stream << value.first.Name << " (" << value.first.Type << ")";
+    if (const NYdb::NScheme::TSchemeEntry* p = std::get_if<NYdb::NScheme::TSchemeEntry>(&value.first)) {
+        stream << p->Name << " (" << p->Type << ")";
+    } else if (const NYdb::NTable::TIndexDescription* p = std::get_if<NYdb::NTable::TIndexDescription>(&value.first)) {
+        stream << p->GetIndexName() << " (" << p->GetIndexType() << " index)";
+    } else {
+        stream << "unknown replication entry";
+    }
 }
 
 Y_DECLARE_OUT_SPEC(, NKikimr::NReplication::NController::TEvPrivate::TEvDiscoveryTargetsResult::TFailedEntry, stream, value) {

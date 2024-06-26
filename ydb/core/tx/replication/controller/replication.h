@@ -32,6 +32,8 @@ public:
 
     enum class ETargetKind: ui8 {
         Table,
+        GlobalSyncIndex,
+        GlobalAsyncIndex
     };
 
     enum class EDstState: ui8 {

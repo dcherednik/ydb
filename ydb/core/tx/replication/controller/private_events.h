@@ -7,6 +7,7 @@
 #include <ydb/core/scheme/scheme_pathid.h>
 #include <ydb/core/protos/flat_tx_scheme.pb.h>
 #include <ydb/core/tx/replication/common/worker_id.h>
+#include <ydb/public/sdk/cpp/client/ydb_table/table.h>
 
 namespace NKikimr::NReplication::NController {
 
@@ -32,7 +33,8 @@ struct TEvPrivate {
     static_assert(EvEnd < EventSpaceEnd(TKikimrEvents::ES_PRIVATE), "expect EvEnd < EventSpaceEnd(TKikimrEvents::ES_PRIVATE)");
 
     struct TEvDiscoveryTargetsResult: public TEventLocal<TEvDiscoveryTargetsResult, EvDiscoveryTargetsResult> {
-        using TAddEntry = std::pair<NYdb::NScheme::TSchemeEntry, TString>; // src, dst
+        using TEntry = std::variant<NYdb::NScheme::TSchemeEntry, NYdb::NTable::TIndexDescription>;
+        using TAddEntry = std::pair<TEntry, TString>; // src, dst
         using TFailedEntry = std::pair<TString, NYdb::TStatus>; // src, error
 
         const ui64 ReplicationId;

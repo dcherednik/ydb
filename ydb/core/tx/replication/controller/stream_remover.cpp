@@ -16,6 +16,11 @@ class TStreamRemover: public TActorBootstrapped<TStreamRemover> {
             Send(YdbProxy, new TEvYdbProxy::TEvAlterTableRequest(SrcPath, NYdb::NTable::TAlterTableSettings()
                 .AppendDropChangefeeds(StreamName)));
             break;
+        case TReplication::ETargetKind::GlobalAsyncIndex:
+        case TReplication::ETargetKind::GlobalSyncIndex:
+            LOG_E("Unsupported DropStream for index");
+            PassAway();
+            break;
         }
 
         Become(&TThis::StateWork);

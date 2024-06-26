@@ -35,11 +35,13 @@ class TTargetDiscoverer: public TActorBootstrapped<TTargetDiscoverer> {
 
         const auto& result = ev->Get()->Result;
         if (result.IsSuccess()) {
-            LOG_D("Describe succeeded"
+            LOG_E("Describe succeeded"
                 << ": path# " << path.first);
 
             auto entry = result.GetEntry();
             switch (entry.Type) {
+            case NYdb::NScheme::ESchemeEntryType::Table:
+                return DescribeTable(path, *it);
             case NYdb::NScheme::ESchemeEntryType::SubDomain:
             case NYdb::NScheme::ESchemeEntryType::Directory:
                 Pending.erase(it);
@@ -77,6 +79,50 @@ class TTargetDiscoverer: public TActorBootstrapped<TTargetDiscoverer> {
             }
         }
 
+        Pending.erase(it);
+        MaybeReply();
+    }
+
+    void DescribeTable(const std::pair<TString, TString>& path, ui32 cookie) {
+        Send(YdbProxy, new TEvYdbProxy::TEvDescribeTableRequest(path.first, {}), 0, cookie);
+    }
+
+    void Handle(TEvYdbProxy::TEvDescribeTableResponse::TPtr& ev) {
+        auto it = Pending.find(ev->Cookie);
+        if (it == Pending.end()) {
+            LOG_W("Unknown describe response"
+                << ": cookie# " << ev->Cookie);
+            return;
+        }
+
+        Y_ABORT_UNLESS(*it < Paths.size());
+        const auto& path = Paths.at(*it);
+
+        const auto& result = ev->Get()->Result;
+        if (result.IsSuccess()) {
+            LOG_E("Describe table succeeded"
+                << ": path# " << path.first);
+
+            auto entry = result.GetEntry();
+            entry.Name = path.first;
+
+            for (const auto& index : result.GetTableDescription().GetIndexDescriptions()) {
+                ToAdd.emplace_back(index, path.second + "/" + index.GetIndexName());
+            }
+
+            ToAdd.emplace_back(std::move(entry), path.second);
+        } else {
+            LOG_E("Describe table failed"
+                << ": path# " << path.first
+                << ", status# " << result.GetStatus()
+                << ", issues# " << result.GetIssues().ToOneLineString());
+
+            if (IsRetryableError(result)) {
+                return RetryDescribe(*it);
+            } else {
+                Failed.emplace_back(path.first, result);
+            }
+        }
         Pending.erase(it);
         MaybeReply();
     }
@@ -225,6 +271,7 @@ public:
         switch (ev->GetTypeRewrite()) {
             hFunc(TEvYdbProxy::TEvDescribePathResponse, Handle);
             hFunc(TEvYdbProxy::TEvListDirectoryResponse, Handle);
+            hFunc(TEvYdbProxy::TEvDescribeTableResponse, Handle);
             sFunc(TEvents::TEvWakeup, Retry);
             sFunc(TEvents::TEvPoison, PassAway);
         }

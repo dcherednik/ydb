@@ -43,6 +43,10 @@ class TDstRemover: public TActorBootstrapped<TDstRemover> {
         case TReplication::ETargetKind::Table:
             tx.SetOperationType(NKikimrSchemeOp::ESchemeOpDropTable);
             break;
+        case TReplication::ETargetKind::GlobalAsyncIndex: 
+        case TReplication::ETargetKind::GlobalSyncIndex: 
+            Y_ABORT_UNLESS(false, "unimplemented");
+            break;
         }
 
         Send(PipeCache, new TEvPipeCache::TEvForward(ev.Release(), SchemeShardId, true));

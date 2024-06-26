@@ -43,6 +43,11 @@ class TReplication::TImpl: public TLagProvider {
         switch (kind) {
         case ETargetKind::Table:
             return new TTableTarget(self, id, std::forward<Args>(args)...);
+        case ETargetKind::GlobalAsyncIndex:
+            Y_ABORT_UNLESS(false, "not implemented");
+        case ETargetKind::GlobalSyncIndex:
+            //Y_ABORT_UNLESS(false, "not implemented");
+            return new TSyncIndexTarget(self, id, std::forward<Args>(args)...);
         }
     }
 

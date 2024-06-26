@@ -46,6 +46,10 @@ class TDstAlterer: public TActorBootstrapped<TDstAlterer> {
             tx.MutableAlterTable()->MutableReplicationConfig()->SetMode(
                 NKikimrSchemeOp::TTableReplicationConfig::REPLICATION_MODE_NONE);
             break;
+        case TReplication::ETargetKind::GlobalAsyncIndex: 
+        case TReplication::ETargetKind::GlobalSyncIndex: 
+            Y_ABORT_UNLESS(false, "unimplemented");
+            break;
         }
 
         Send(PipeCache, new TEvPipeCache::TEvForward(ev.Release(), SchemeShardId, true));

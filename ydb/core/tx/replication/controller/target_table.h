@@ -14,4 +14,15 @@ protected:
 
 }; // TTableTarget
 
+class TSyncIndexTarget: public TTargetBase {
+public:
+    explicit TSyncIndexTarget(TReplication* replication,
+        ui64 id, const TString& srcPath, const TString& dstPath);
+
+    void Progress(const TActorContext& ctx) override;
+
+protected:
+    IActor* CreateWorkerRegistar(const TActorContext& ctx) const override;
+}; // TSyncIndexTarget
+
 }

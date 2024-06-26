@@ -116,6 +116,10 @@ class TDstCreator: public TActorBootstrapped<TDstCreator> {
                     .WithKeyShardBoundary(true)));
             }
             break;
+        case TReplication::ETargetKind::GlobalAsyncIndex: 
+        case TReplication::ETargetKind::GlobalSyncIndex: 
+            Y_ABORT_UNLESS(false, "unimplemented");
+            break;
         }
     }
 
@@ -165,6 +169,8 @@ class TDstCreator: public TActorBootstrapped<TDstCreator> {
 
         Ydb::Table::CreateTableRequest scheme;
         result.GetTableDescription().SerializeTo(scheme);
+        Cerr << "Got dst scheme: " << scheme.DebugString() << Endl;
+        //scheme.mutable_indexes()->Clear();
 
         Ydb::StatusIds::StatusCode status;
         TString error;
@@ -185,6 +191,13 @@ class TDstCreator: public TActorBootstrapped<TDstCreator> {
             TxBody.SetOperationType(NKikimrSchemeOp::ESchemeOpCreateIndexedTable);
             tableDesc = TxBody.MutableCreateIndexedTable()->MutableTableDescription();
             TxBody.SetInternal(true);
+            for (const auto& index : scheme.get_arr_indexes()) {
+                auto ok = DstIndexTables.insert({DstPath + "/" + index.name() + "/indexImplTable", TPathId()}).second;
+                if (!ok) {
+                    const auto err = TString("Dublicate index name: ") + index.name();
+                    return Error(NKikimrScheme::StatusSchemeError, err);
+                }
+            }
         } else {
             TxBody.SetOperationType(NKikimrSchemeOp::ESchemeOpCreateTable);
             tableDesc = TxBody.MutableCreateTable();
@@ -255,9 +268,16 @@ class TDstCreator: public TActorBootstrapped<TDstCreator> {
 
         switch (record.GetStatus()) {
         case NKikimrScheme::StatusAccepted:
-            DstPathId = TPathId(SchemeShardId, record.GetPathId());
-            Y_DEBUG_ABORT_UNLESS(TxId == record.GetTxId());
-            return SubscribeTx(record.GetTxId());
+            if (DstIndexTables) {
+                // TEvModifySchemeTransactionResult returns pathId for last created path only
+                // run Describe to get information about all created pathes
+                NeedToCheck = true;
+                return SubscribeTx(record.GetPathCreateTxId());
+            } else {
+                DstPathId = TPathId(SchemeShardId, record.GetPathId());
+                Y_DEBUG_ABORT_UNLESS(TxId == record.GetTxId());
+                return SubscribeTx(record.GetTxId());
+            }
         case NKikimrScheme::StatusMultipleModifications:
             if (record.HasPathCreateTxId()) {
                 NeedToCheck = true;
@@ -291,6 +311,11 @@ class TDstCreator: public TActorBootstrapped<TDstCreator> {
 
     void DescribeDstPath() {
         Send(PipeCache, new TEvPipeCache::TEvForward(new TEvSchemeShard::TEvDescribeScheme(DstPath), SchemeShardId));
+        for (const auto& [name, _] : DstIndexTables) {
+            auto event = new TEvSchemeShard::TEvDescribeScheme(name);
+            event->Record.MutableOptions()->SetShowPrivateTable(true);
+            Send(PipeCache, new TEvPipeCache::TEvForward(event, SchemeShardId));
+        }
         Become(&TThis::StateDescribeDstPath);
     }
 
@@ -304,17 +329,28 @@ class TDstCreator: public TActorBootstrapped<TDstCreator> {
     }
 
     void Handle(TEvSchemeShard::TEvDescribeSchemeResult::TPtr& ev) {
-        LOG_T("Handle " << ev->Get()->ToString());
+        LOG_N("Handle " << ev->Get()->ToString());
+        Cerr << "Handle " << ev->Get()->ToString() << Endl;
+        //Y_ABORT_UNLESS(false, "XXXXXXX");
         const auto& record = ev->Get()->GetRecord();
 
         switch (record.GetStatus()) {
             case NKikimrScheme::StatusSuccess: {
                 TString error;
-                if (!CheckScheme(record.GetPathDescription(), error)) {
+                if (false && !CheckScheme(record.GetPathDescription(), error)) {
                     return Error(NKikimrScheme::StatusSchemeError, error);
                 } else {
-                    DstPathId = TPathId(record.GetPathOwnerId(), record.GetPathId());
-                    return Success();
+                    auto it = DstIndexTables.find(record.GetPath());
+                    if (it == DstIndexTables.end()) {
+                        DstPathId = TPathId(record.GetPathOwnerId(), record.GetPathId());
+                    } else {
+                        it->second = TPathId(record.GetPathOwnerId(), record.GetPathId());
+                        ResolvedIndexes++;
+                    }
+
+                    if (ResolvedIndexes == DstIndexTables.size() && DstPathId) {
+                        return Success();
+                    }
                 }
                 break;
             }
@@ -336,6 +372,10 @@ class TDstCreator: public TActorBootstrapped<TDstCreator> {
         switch (Kind) {
         case TReplication::ETargetKind::Table:
             return CheckTableScheme(desc.GetTable(), error);
+        case TReplication::ETargetKind::GlobalAsyncIndex: 
+        case TReplication::ETargetKind::GlobalSyncIndex: 
+            Y_ABORT_UNLESS(false, "unimplemented");
+            break;
         }
     }
 
@@ -503,7 +543,16 @@ class TDstCreator: public TActorBootstrapped<TDstCreator> {
     void Success() {
         Y_ABORT_UNLESS(DstPathId);
         LOG_I("Success"
-            << ": dstPathId# " << DstPathId);
+            << ": dstPath# " << DstPath
+            << " dstPathId# " << DstPathId);
+
+        for (const auto& [name, pathId] : DstIndexTables) {
+            LOG_I("Success"
+                << ": dstPath# " << name
+                << " dstPathId# " << pathId);
+
+            //Send(Parent, new TEvPrivate::TEvCreateDstResult(ReplicationId, TargetId, pathId));
+        }
 
         Send(Parent, new TEvPrivate::TEvCreateDstResult(ReplicationId, TargetId, DstPathId));
         PassAway();
@@ -584,6 +633,8 @@ private:
     TActorId PipeCache;
     bool NeedToCheck = false;
     TPathId DstPathId;
+    THashMap<TString, TPathId> DstIndexTables;
+    size_t ResolvedIndexes = 0;
 
 }; // TDstCreator
 

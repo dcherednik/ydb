@@ -29,6 +29,10 @@ class TStreamCreator: public TActorBootstrapped<TStreamCreator> {
             Send(YdbProxy, new TEvYdbProxy::TEvAlterTableRequest(SrcPath, NYdb::NTable::TAlterTableSettings()
                 .AppendAddChangefeeds(Changefeed)));
             break;
+        case TReplication::ETargetKind::GlobalAsyncIndex:
+        case TReplication::ETargetKind::GlobalSyncIndex:
+            Y_ABORT_UNLESS(false, "unimplemented");
+            break;
         }
 
         Become(&TThis::StateCreateStream);
