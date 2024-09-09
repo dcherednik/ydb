@@ -1,6 +1,8 @@
 syntax = "proto3";
 option cc_enable_arenas = true;
 
+import "ydb/public/api/protos/ydb_value.proto";
+
 package Ydb.TableStats;
 option java_package = "com.yandex.ydb";
 
@@ -34,6 +36,15 @@ message CompilationStats {
     uint64 cpu_time_us = 3;
 }
 
+message KeyNodeEntry {
+    TypedValue key_bounds = 1;
+    uint32 node_id = 2;
+}
+
+message KeyNodeMap {
+    repeated KeyNodeEntry entry = 1;
+}
+
 message QueryStats {
     // A query might have one or more execution phases
     repeated QueryPhaseStats query_phases = 1;
@@ -43,4 +54,5 @@ message QueryStats {
     string query_ast = 5;
     uint64 total_duration_us = 6;
     uint64 total_cpu_time_us = 7;
+    KeyNodeMap key_node_map = 8;
 }
