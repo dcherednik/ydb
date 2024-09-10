@@ -766,6 +766,13 @@ message RenameTablesResponse {
     Ydb.Operations.Operation operation = 1;
 }
 
+// Describes nodes serves some key range
+// The first one is leader,
+// any other are folower (if present)
+message Nodes {
+    repeated uint32 nodes;
+}
+
 // Describe table with given path
 message DescribeTableRequest {
     // Session identifier
@@ -779,6 +786,8 @@ message DescribeTableRequest {
     bool include_table_stats = 6;
     // Includes partition statistics (required include_table_statistics)
     bool include_partition_stats = 7;
+    // Includes shard -> node id maping (required include_shard_key_bounds)
+    bool include_node_id_info = 8;
 }
 
 message DescribeTableResponse {
@@ -823,6 +832,9 @@ message DescribeTableResult {
     bool temporary = 17;
     // Is table column or row oriented
     StoreType store_type = 18;
+    // NodeId where shards located
+    // Each Nodes element contains message describes shards serve key range before coresponding bound in the shard_key_bounds field in the same position
+    repeated Nodes node_ids = 19;
 }
 
 message Query {
