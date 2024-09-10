@@ -6,10 +6,27 @@ import "ydb/public/api/protos/ydb_value.proto";
 package Ydb.TableStats;
 option java_package = "com.yandex.ydb";
 
+message KeyRange {
+    // Left border
+    TypedValue from_key = 1;
+
+    // Right border
+    TypedValue to_key = 3;
+}
+
 // Describes select, update (insert, upsert, replace) and delete operations
 message OperationStats {
     uint64 rows = 1;
     uint64 bytes = 2;
+}
+
+message KeyNodeEntry {
+    KeyRange bounds = 1;
+    uint32 node_id = 2;
+}
+
+message DataDistribution {
+    repeated KeyNodeEntry entry = 1;
 }
 
 // Describes all operations on a table
@@ -20,6 +37,7 @@ message TableAccessStats {
     OperationStats updates = 4;
     OperationStats deletes = 5;
     uint64 partitions_count = 6;
+    DataDistribution distribution = 7;
 }
 
 message QueryPhaseStats {
@@ -34,15 +52,6 @@ message CompilationStats {
     bool from_cache = 1;
     uint64 duration_us = 2;
     uint64 cpu_time_us = 3;
-}
-
-message KeyNodeEntry {
-    TypedValue key_bounds = 1;
-    uint32 node_id = 2;
-}
-
-message KeyNodeMap {
-    repeated KeyNodeEntry entry = 1;
 }
 
 message QueryStats {
