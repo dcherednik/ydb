@@ -7,6 +7,8 @@
 #include <ydb/core/grpc_services/base/base.h>
 #include <ydb/core/grpc_services/rpc_common/rpc_common.h>
 #include <ydb/core/tx/schemeshard/schemeshard.h>
+#include <ydb/core/kqp/executer_actor/shards_resolver/kqp_shards_resolver.h>
+#include <ydb/core/kqp/executer_actor/shards_resolver/kqp_shards_resolver_events.h>
 #include <ydb/core/ydb_convert/table_description.h>
 #include <ydb/core/ydb_convert/ydb_convert.h>
 
@@ -16,6 +18,20 @@ namespace NGRpcService {
 using namespace NActors;
 using namespace Ydb;
 
+void FillNodesInfo(Ydb::Table::DescribeTableResult& out,
+        const NKikimrSchemeOp::TPathDescription& in, const TMap<ui64, ui64>& shardNodes) {
+    Y_UNUSED(out);
+    const auto& parts = in.GetTablePartitions();
+    for (const auto& part : parts) {
+            Cerr << part.DebugString() << Endl;
+        auto it = shardNodes.find(part.GetDatashardId());
+        if (it == shardNodes.end()) {
+            ythrow yexception() << "unknown datashardId to fill DescribeTableResult";
+        }
+        Cerr << it->second << Endl;
+    } 
+}
+
 using TEvDescribeTableRequest = TGrpcRequestOperationCall<Ydb::Table::DescribeTableRequest,
     Ydb::Table::DescribeTableResponse>;
 
@@ -23,6 +39,10 @@ class TDescribeTableRPC : public TRpcSchemeRequestActor<TDescribeTableRPC, TEvDe
     using TBase = TRpcSchemeRequestActor<TDescribeTableRPC, TEvDescribeTableRequest>;
 
     TString OverrideName;
+    NSchemeShard::TEvSchemeShard::TEvDescribeSchemeResult::TPtr PendingDescribeResult;
+    TActorId ShardsResolverId;
+    bool NeedResolveShards = true;
+    TMap<ui64, ui64> ShardNodes;
 
     static bool ShowPrivatePath(const TString& path) {
         if (AppData()->AllowPrivateTableDescribeForTest) {
@@ -68,6 +88,7 @@ private:
         switch (ev->GetTypeRewrite()) {
             HFunc(TEvTxProxySchemeCache::TEvNavigateKeySetResult, Handle);
             HFunc(NSchemeShard::TEvSchemeShard::TEvDescribeSchemeResult, Handle);
+            HFunc(NKqp::NShardResolver::TEvShardsResolveStatus, Handle);
             default: TBase::StateWork(ev);
         }
     }
@@ -104,6 +125,12 @@ private:
     void Handle(NSchemeShard::TEvSchemeShard::TEvDescribeSchemeResult::TPtr& ev, const TActorContext& ctx) {
         const auto& record = ev->Get()->GetRecord();
         const auto status = record.GetStatus();
+
+        const auto partsNum = record.GetPathDescription().GetTablePartitions().size();
+        if (status == NKikimrScheme::StatusSuccess && NeedResolveShards && partsNum > 0) {
+            PerformTabletResolve(ev);
+            return;
+        }
         if (record.HasReason()) {
             auto issue = NYql::TIssue(record.GetReason());
             Request_->RaiseIssue(issue);
@@ -154,6 +181,9 @@ private:
                 describeTableResult.mutable_primary_key()->CopyFrom(tableDescription.GetKeyColumnNames());
 
                 try {
+                    if (GetProtoRequest()->include_shard_key_bounds()) {
+                        Cerr << record.DebugString() << Endl;
+                    }
                     FillTableBoundary(describeTableResult, tableDescription, splitKeyType);
                 } catch (const std::exception& ex) {
                     LOG_ERROR(ctx, NKikimrServices::GRPC_SERVER, "Unable to fill table boundary: %s", ex.what());
@@ -183,6 +213,16 @@ private:
                 FillKeyBloomFilter(describeTableResult, tableDescription);
                 FillReadReplicasSettings(describeTableResult, tableDescription);
 
+                try {
+                    if (!ShardNodes.empty()) {
+                        FillNodesInfo(describeTableResult, pathDescription, ShardNodes);
+                    }
+                } catch (const std::exception& ex) {
+                    LOG_ERROR(ctx, NKikimrServices::GRPC_SERVER, "Unable to fill nodes info: %s", ex.what());
+                    Request_->RaiseIssue(NYql::ExceptionToIssue(ex));
+                    return Reply(Ydb::StatusIds::INTERNAL_ERROR, ctx);
+                } 
+
                 return ReplyWithResult(Ydb::StatusIds::SUCCESS, describeTableResult, ctx);
             }
 
@@ -203,6 +243,40 @@ private:
                 return Reply(Ydb::StatusIds::GENERIC_ERROR, ctx);
             }
         }
+    }
+
+    void PerformTabletResolve(NSchemeShard::TEvSchemeShard::TEvDescribeSchemeResult::TPtr& ev) {
+        PendingDescribeResult = ev;
+        const auto& record = PendingDescribeResult->Get()->GetRecord();
+        const auto& parts = record.GetPathDescription().GetTablePartitions();
+
+        TSet<ui64> shards;
+        for (const auto& part : parts) {
+            shards.insert(part.GetDatashardId());
+        }
+
+        auto shardsResolver = NKqp::CreateKqpShardsResolver(
+                this->SelfId(), 0, false, std::move(shards));
+
+        ShardsResolverId = this->RegisterWithSameMailbox(shardsResolver);
+    }
+
+    void Handle(NKqp::NShardResolver::TEvShardsResolveStatus::TPtr& ev, const TActorContext& ctx) {
+        auto& reply = *ev->Get();
+        if (reply.Status != Ydb::StatusIds::SUCCESS) {
+            Request_->RaiseIssues(reply.Issues);
+            return Reply(reply.Status, ctx);
+        }
+
+        if (reply.Unresolved != 0) {
+            Request_->RaiseIssue(NYql::TIssue("Unable to resolve some tablets"));
+            return Reply(Ydb::StatusIds::UNAVAILABLE, ctx);
+        }
+
+        ShardNodes = std::move(reply.ShardNodes);
+        NeedResolveShards = false;
+
+        Handle(PendingDescribeResult, ctx);
     }
 
     void SendProposeRequest(const TString& path, const TActorContext& ctx) {
