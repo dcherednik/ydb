@@ -22,6 +22,10 @@
 #include <sys/ioctl.h>
 #endif
 
+#ifndef MSG_ZEROCOPY
+#define MSG_ZEROCOPY 0x4000000
+#endif
+
 #include <cerrno>
 
 namespace NInterconnect {
@@ -113,7 +117,11 @@ namespace NInterconnect {
 
     ssize_t
     TStreamSocket::Send(const void* msg, size_t len, TString* /*err*/) const {
-        const auto ret = ::send(Descriptor, static_cast<const char*>(msg), int(len), 0);
+        int flags = 0;
+        if (len > 8092) {
+            flags = MSG_ZEROCOPY;
+        }
+        const auto ret = ::send(Descriptor, static_cast<const char*>(msg), int(len), flags);
         if (ret < 0)
             return -LastSocketError();
 

@@ -725,6 +725,7 @@ namespace NActors {
                 maxElementsInIOV = 64;
 #endif
             }
+            maxElementsInIOV = 1;
 
             TStackVec<TConstIoVec, iovLimit> wbuffers;
 
