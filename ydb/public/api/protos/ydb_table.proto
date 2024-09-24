@@ -766,10 +766,9 @@ message RenameTablesResponse {
     Ydb.Operations.Operation operation = 1;
 }
 
-// Describes nodes that serve shard key range
-// The first one is leader, the rest are followers (if present)
+// Describes node that serve shard key range
 message KeyRangeNodes {
-    repeated uint32 nodes = 1;
+    uint32 leader = 1;
 }
 
 // Describe table with given path
@@ -832,7 +831,7 @@ message DescribeTableResult {
     // Is table column or row oriented
     StoreType store_type = 18;
     // Node ids where shards are located
-    // Each node_ids element contains node ids where a corresponding key range is located
+    // Each node_ids element contains node id where a corresponding key range is located
     repeated KeyRangeNodes node_ids = 19;
 }
 
