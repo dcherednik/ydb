@@ -437,6 +437,8 @@ namespace NActors {
             return ReceiveContext->ClockSkew_us;
         }
 
+        void ProcessErrQueue(NInterconnect::TStreamSocket& socket);
+
     private:
         friend class TInterconnectProxyTCP;
 
