@@ -20,6 +20,8 @@
 #include <util/datetime/cputimer.h>
 
 #include "interconnect_impl.h"
+#include "interconnect_zero_copy.h"
+
 #include "poller_tcp.h"
 #include "poller_actor.h"
 #include "interconnect_channel.h"
@@ -511,6 +513,7 @@ namespace NActors {
         void ReestablishConnectionExecute();
 
         TInterconnectProxyTCP* const Proxy;
+        std::unique_ptr<NInterconnect::TZeroCopyCtx> ZeroCopyCtx;
 
         // various connection settings access
         TDuration GetDeadPeerTimeout() const;

@@ -37,6 +37,7 @@ SRCS(
     interconnect_tcp_server.h
     interconnect_tcp_session.cpp
     interconnect_tcp_session.h
+    interconnect_zero_copy.cpp
     load.cpp
     load.h
     logging.h

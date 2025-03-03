@@ -1,6 +1,7 @@
 #include "interconnect_tcp_proxy.h"
 #include "interconnect_tcp_session.h"
 #include "interconnect_handshake.h"
+#include "interconnect_zero_copy.h"
 
 #include <ydb/library/actors/core/probes.h>
 #include <ydb/library/actors/core/log.h>
@@ -29,24 +30,11 @@ namespace NActors {
         }
     }
 
-    // Whether the cmsg received from error queue is of the IPv4 or IPv6 levels.
-    bool CmsgIsIpLevel(const cmsghdr& cmsg) {
-        return (cmsg.cmsg_level == SOL_IPV6 && cmsg.cmsg_type == IPV6_RECVERR) ||
-           (cmsg.cmsg_level == SOL_IP && cmsg.cmsg_type == IP_RECVERR);
-    }
-  
-    bool CmsgIsZeroCopy(const cmsghdr& cmsg) {
-        if (!CmsgIsIpLevel(cmsg)) {
-            return false;
-        }
-        auto serr = reinterpret_cast<const sock_extended_err*> CMSG_DATA(&cmsg);
-        return serr->ee_errno == 0 && serr->ee_origin == SO_EE_ORIGIN_ZEROCOPY;
-    }
-
     TInterconnectSessionTCP::TInterconnectSessionTCP(TInterconnectProxyTCP* const proxy, TSessionParams params)
         : TActor(&TInterconnectSessionTCP::StateFunc)
         , Created(TInstant::Now())
         , Proxy(proxy)
+        , ZeroCopyCtx(NInterconnect::MakeZeroCopyCtx(true))
         , CloseOnIdleWatchdog(GetCloseOnIdleTimeout(), std::bind(&TThis::OnCloseOnIdleTimerHit, this))
         , LostConnectionWatchdog(GetLostConnectionTimeout(), std::bind(&TThis::OnLostConnectionTimerHit, this))
         , Params(std::move(params))
@@ -621,7 +609,7 @@ namespace NActors {
             size_t totalWritten = 0;
 
             if (socket) {
-                ProcessErrQueue(*socket);
+                ZeroCopyCtx->ProcessErrQueue(*socket);
             }
 
             if (stream && socket && !*writeBlocked) {
@@ -716,66 +704,10 @@ namespace NActors {
         WriteBlockedByFullSendBuffer = writeBlockedByFullSendBuffer;
     }
 
-    // copy paste from grpc
-    void TInterconnectSessionTCP::ProcessErrQueue(NInterconnect::TStreamSocket& socket) {
-        struct iovec iov;
-        iov.iov_base = nullptr;
-        iov.iov_len = 0;
-        struct msghdr msg;
-        msg.msg_name = nullptr;
-        msg.msg_namelen = 0;
-        msg.msg_iov = &iov;
-        msg.msg_iovlen = 0;
-        msg.msg_flags = 0;
-        // Allocate enough space so we don't need to keep increasing this as size of
-        // OPT_STATS increase.
-        constexpr size_t cmsg_alloc_space =
-            CMSG_SPACE(sizeof(scm_timestamping)) +
-            CMSG_SPACE(sizeof(sock_extended_err) + sizeof(sockaddr_in)) +
-            CMSG_SPACE(32 * NLA_ALIGN(NLA_HDRLEN + sizeof(uint64_t)));
-        // Allocate aligned space for cmsgs received along with timestamps.
-        union {
-            char rbuf[cmsg_alloc_space];
-            struct cmsghdr align;
-        } aligned_buf;
-        msg.msg_control = aligned_buf.rbuf;
-        ssize_t r;
-        while (true) {
-            msg.msg_controllen = sizeof(aligned_buf.rbuf);
-
-            do {
-                r = socket.RecvErrQueue(&msg);
-            } while (r == -EINTR);
-      
-            if (r < 0) {
-                return;
-            }
-            if ((msg.msg_flags & MSG_CTRUNC) != 0) {
-                LOG_ERROR_IC_SESSION("ICS03", "Error message was truncated");
-            }
-      
-            if (msg.msg_controllen == 0) {
-                // There was no control message found. It was probably spurious.
-                return;
-            }
-            for (auto cmsg = CMSG_FIRSTHDR(&msg); cmsg && cmsg->cmsg_len;
-                cmsg = CMSG_NXTHDR(&msg, cmsg)) {
-                if (CmsgIsZeroCopy(*cmsg)) {
-                    auto serr = reinterpret_cast<struct sock_extended_err*>(CMSG_DATA(cmsg));
-                    //fprintf(stderr, "ZC completed: %u..%u\n", serr->ee_info, serr->ee_data);
-                    LOG_DEBUG_IC_SESSION("ICS03", "ZC completed: %u, %u",
-                        serr->ee_info, serr->ee_data);
-
-                }
-            }
-        }
-    }
-
     ssize_t TInterconnectSessionTCP::Write(NInterconnect::TOutgoingStream& stream, NInterconnect::TStreamSocket& socket,
             size_t maxBytes) {
         LWPROBE_IF_TOO_LONG(SlowICWriteData, Proxy->PeerNodeId, ms) {
             constexpr ui32 iovLimit = 256;
-            constexpr ui32 zcThreshold = 16384;
 
             ui32 maxElementsInIOV;
             if (Params.Encryption) {
@@ -795,42 +727,21 @@ namespace NActors {
             stream.ProduceIoVec(wbuffers, maxElementsInIOV, maxBytes);
             Y_ABORT_UNLESS(!wbuffers.empty());
 
-            ssize_t zcPos = -1;
-            for (size_t i = 0; i < wbuffers.size(); i++) {
-                if (wbuffers[i].Size > zcThreshold) {
-                    zcPos = i;
-                    break;
-                }
-            }
-
-            if (wbuffers.size() > 1) {
-                if (zcPos == 0) {
-                    wbuffers.resize(1);
-                } else if (zcPos > 0) {
-                    wbuffers.resize((size_t)zcPos);
-                }
-            }
-
             TString err;
             ssize_t r = 0;
-            { // issue syscall with timing
+            if (Params.Encryption) {
                 const ui64 begin = GetCycleCountFast();
 
+                Y_DEBUG_ABORT_UNLESS(wbuffers.size() == 1);
                 do {
-                    if (wbuffers.size() == 1) {
-                        auto& front = wbuffers.front();
-                        if (front.Size > zcThreshold) {
-                            r = socket.SendZc(front.Data, front.Size);
-                        } else {
-                            r = socket.Send(front.Data, front.Size, &err);
-                        }
-                    } else {
-                        r = socket.WriteV(reinterpret_cast<const iovec*>(wbuffers.data()), wbuffers.size());
-                    }
+                    auto& front = wbuffers.front();
+                    r = socket.Send(front.Data, front.Size, &err);
                 } while (r == -EINTR);
 
                 const ui64 end = GetCycleCountFast();
                 Proxy->Metrics->IncSendSyscalls((end - begin) * 1'000'000 / GetCyclesPerMillisecond());
+            } else {
+                r = ZeroCopyCtx->ProcessSend(wbuffers, socket, Proxy->Metrics.get());
             }
 
             if (r > 0) {
@@ -1459,6 +1370,16 @@ namespace NActors {
                             MON_VAR(GetTotalInflightAmountOfData())
                             MON_VAR(GetCloseOnIdleTimeout())
                             MON_VAR(Subscribers.size())
+                            TABLER() {
+                                TABLED() { str << "ZeroCopy state"; }
+                                TABLED() { str << ZeroCopyCtx->GetCurrentState(); }
+                            }
+                            TABLER() {
+                                TABLED() { str << "ZeroCopy send with copy / send total"; }
+                                TABLED() {
+                                    str << Sprintf("%d / %d", ZeroCopyCtx->GetZcSendWithCopy(), ZeroCopyCtx->GetZcSend());
+                                }
+                            }
                         }
                     }
                 }

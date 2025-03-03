@@ -127,6 +127,15 @@ namespace NInterconnect {
     }
 
     ssize_t
+    TStreamSocket::SendWithFlags(const void* msg, size_t len, int flags) const {
+        const auto ret = ::send(Descriptor, static_cast<const char*>(msg), int(len), flags);
+        if (ret < 0)
+            return -LastSocketError();
+
+        return ret;
+    }
+
+    ssize_t
     TStreamSocket::SendZc(const void* msg, size_t len) const {
         const auto ret = ::send(Descriptor, static_cast<const char*>(msg), int(len), MSG_ZEROCOPY);
         if (ret < 0)
