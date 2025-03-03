@@ -64,11 +64,15 @@ ssize_t TZeroCopyCtx::ProcessSend(TWriteRefVec& wbuffers, TStreamSocket& socket,
     { // issue syscall with timing
         const ui64 begin = GetCycleCountFast();
 
+        int flags = 0;
         do {
             if (wbuffers.size() == 1) {
                 auto& front = wbuffers.front();
 #ifdef YDB_MSG_ZEROCOPY_SUPPORTED 
-                r = socket.SendWithFlags(front.Data, front.Size, front.Size > ZcThreshold ? MSG_ZEROCOPY : 0);
+                if (front.Size > ZcThreshold) {
+                    flags = MSG_ZEROCOPY;
+                }
+                r = socket.SendWithFlags(front.Data, front.Size, flags);
 #else
                 r = socket.SendWithFlags(front.Data, front.Size, 0);
 #endif
@@ -76,6 +80,22 @@ ssize_t TZeroCopyCtx::ProcessSend(TWriteRefVec& wbuffers, TStreamSocket& socket,
                 r = socket.WriteV(reinterpret_cast<const iovec*>(wbuffers.data()), wbuffers.size());
             }
         } while (r == -EINTR);
+
+        if (flags == MSG_ZEROCOPY) {
+            if (r > 0) {
+                ZcUncompletedSend++;
+            } else if (r == -ENOBUFS) {
+                // Got ENOBUFS just for first not completed zero copy transfer
+                // it looks like misconfiguration (unable to lock page or net.core.optmem_max too small)
+                // It is better just stop trying to use ZC
+                if (ZcUncompletedSend == ZcSend) {
+                    ZcState = ZC_DISABLED_ERR;
+                } else {
+                    ZcState = ZC_CONGESTED;
+                }
+            }
+        }
+
         const ui64 end = GetCycleCountFast();
 
         counters->IncSendSyscalls((end - begin) * 1'000'000 / GetCyclesPerMillisecond());
@@ -143,6 +163,9 @@ void TZeroCopyCtx::ProcessErrQueue(NInterconnect::TStreamSocket& socket) {
                     //    serr->ee_info, serr->ee_data);
                 }
             }
+        }
+        if (ZcState == ZC_CONGESTED && ZcSend == ZcUncompletedSend) {
+            ZcState =ZC_OK;
         }
     }
 #endif

@@ -23,6 +23,7 @@ public:
     TString GetCurrentState() const;
 
 private:
+    ui64 ZcUncompletedSend = 0;
     ui64 ZcSend = 0;
     ui64 ZcSendWithCopy = 0;
 
