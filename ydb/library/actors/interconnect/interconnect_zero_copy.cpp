@@ -51,7 +51,7 @@ ssize_t TZeroCopyCtx::ProcessSend(TWriteRefVec& wbuffers, TStreamSocket& socket,
 
         if (wbuffers.size() > 1) {
             if (zcPos == 0) {
-               wbuffers.resize(1);
+                wbuffers.resize(1);
             } else if (zcPos > 0) {
                 wbuffers.resize((size_t)zcPos);
             }
@@ -69,7 +69,7 @@ ssize_t TZeroCopyCtx::ProcessSend(TWriteRefVec& wbuffers, TStreamSocket& socket,
             if (wbuffers.size() == 1) {
                 auto& front = wbuffers.front();
 #ifdef YDB_MSG_ZEROCOPY_SUPPORTED 
-                if (front.Size > ZcThreshold) {
+                if (ZcState == ZC_OK && front.Size > ZcThreshold) {
                     flags = MSG_ZEROCOPY;
                 }
                 r = socket.SendWithFlags(front.Data, front.Size, flags);
@@ -85,14 +85,17 @@ ssize_t TZeroCopyCtx::ProcessSend(TWriteRefVec& wbuffers, TStreamSocket& socket,
             if (r > 0) {
                 ZcUncompletedSend++;
             } else if (r == -ENOBUFS) {
+                fprintf(stderr, "got enobuf: %lu\n", ZcUncompletedSend);
                 // Got ENOBUFS just for first not completed zero copy transfer
                 // it looks like misconfiguration (unable to lock page or net.core.optmem_max too small)
-                // It is better just stop trying to use ZC
+                // It is better just to stop trying using ZC
                 if (ZcUncompletedSend == ZcSend) {
                     ZcState = ZC_DISABLED_ERR;
                 } else {
                     ZcState = ZC_CONGESTED;
                 }
+                // The state changed. Trigger retry
+                r = -EAGAIN;
             }
         }
 
@@ -134,16 +137,19 @@ void TZeroCopyCtx::ProcessErrQueue(NInterconnect::TStreamSocket& socket) {
                 r = socket.RecvErrQueue(&msg);
             } while (r == -EINTR);
       
-            if (r < 0) {
-                return;
+            if (r == -EAGAIN || r == -EWOULDBLOCK) {
+            //if (r < 0) {
+                break;
             }
-            //if ((msg.msg_flags & MSG_CTRUNC) != 0) {
-                //LOG_ERROR_IC_SESSION("ICS03", "Error message was truncated");
-            //}
+            
+            if ((msg.msg_flags & MSG_CTRUNC) != 0) {
+                ZcState = ZC_DISABLED_ERR;
+                LastErr += "errqueue message was truncated;";
+            }
       
             if (msg.msg_controllen == 0) {
                 // There was no control message found. It was probably spurious.
-                return;
+                break;
             }
             for (auto cmsg = CMSG_FIRSTHDR(&msg); cmsg && cmsg->cmsg_len;
                 cmsg = CMSG_NXTHDR(&msg, cmsg)) {
@@ -158,9 +164,6 @@ void TZeroCopyCtx::ProcessErrQueue(NInterconnect::TStreamSocket& socket) {
                     if (serr->ee_code == SO_EE_CODE_ZEROCOPY_COPIED) {
                         ZcSendWithCopy += sends;
                     }
-                    fprintf(stderr, "ZC completed: %u..%u\n", serr->ee_info, serr->ee_data);
-                    //LOG_DEBUG_IC_SESSION("ICS03", "ZC completed: %u, %u",
-                    //    serr->ee_info, serr->ee_data);
                 }
             }
         }
