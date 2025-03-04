@@ -252,6 +252,8 @@ namespace NActors {
         Socket = std::move(ev->Get()->Socket);
         XdcSocket = std::move(ev->Get()->XdcSocket);
 
+        ZeroCopyCtx->ResetState();
+
         // there may be a race
         const ui64 nextPacket = Max(LastConfirmed, ev->Get()->NextPacket);
 
@@ -608,13 +610,10 @@ namespace NActors {
                 const TPollerToken::TPtr& token, bool *writeBlocked, size_t maxBytes) {
             size_t totalWritten = 0;
 
-            if (socket) {
-                ZeroCopyCtx->ProcessErrQueue(*socket);
-            }
-
             if (stream && socket && !*writeBlocked) {
                 for (;;) {
-                    if (const ssize_t r = Write(stream, *socket, maxBytes); r > 0) {
+                    // MSG_ZEROCOPY make profit only in case of sends grather than 16k. So use it only for xdc.
+                    if (const ssize_t r = Write(stream, *socket, maxBytes, socket == XdcSocket); r > 0) {
                         stream.Advance(r);
                         totalWritten += r;
                     } else if (r == -1) {
@@ -683,6 +682,10 @@ namespace NActors {
             }
         }
 
+        if (XdcSocket) {
+            ZeroCopyCtx->ProcessErrQueue(*XdcSocket);
+        }
+
         if (const size_t w = process(XdcStream, XdcSocket, XdcPollerToken, &ReceiveContext->XdcWriteBlocked, maxBytesAtOnce)) {
             XdcBytesSent += w;
             XdcOffset += w;
@@ -705,7 +708,7 @@ namespace NActors {
     }
 
     ssize_t TInterconnectSessionTCP::Write(NInterconnect::TOutgoingStream& stream, NInterconnect::TStreamSocket& socket,
-            size_t maxBytes) {
+            const size_t maxBytes, const bool tryZc) {
         LWPROBE_IF_TOO_LONG(SlowICWriteData, Proxy->PeerNodeId, ms) {
             constexpr ui32 iovLimit = 256;
 
@@ -741,7 +744,7 @@ namespace NActors {
                 const ui64 end = GetCycleCountFast();
                 Proxy->Metrics->IncSendSyscalls((end - begin) * 1'000'000 / GetCyclesPerMillisecond());
             } else {
-                r = ZeroCopyCtx->ProcessSend(wbuffers, socket, Proxy->Metrics.get());
+                r = ZeroCopyCtx->ProcessSend(wbuffers, socket, Proxy->Metrics.get(), tryZc);
             }
 
             if (r > 0) {

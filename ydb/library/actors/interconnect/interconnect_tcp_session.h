@@ -499,7 +499,7 @@ namespace NActors {
         void Handle(TEvPollerReady::TPtr& ev);
         void Handle(TEvPollerRegisterResult::TPtr ev);
         void WriteData();
-        ssize_t Write(NInterconnect::TOutgoingStream& stream, NInterconnect::TStreamSocket& socket, size_t maxBytes);
+        ssize_t Write(NInterconnect::TOutgoingStream& stream, NInterconnect::TStreamSocket& socket, size_t maxBytes, bool tryZc);
 
         ui32 MakePacket(bool data, TMaybe<ui64> pingMask = {});
         void FillSendingBuffer(TTcpPacketOutTask& packet, ui64 serial);

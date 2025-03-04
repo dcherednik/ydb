@@ -3,11 +3,12 @@
 #include <util/datetime/cputimer.h>
 
 #if defined (__linux__)
+
 #define YDB_MSG_ZEROCOPY_SUPPORTED 1
 #include <linux/errqueue.h>
 #include <linux/netlink.h>
-#endif 
 
+#endif 
 
 #ifdef YDB_MSG_ZEROCOPY_SUPPORTED
 
@@ -19,7 +20,6 @@
 
 
 namespace NInterconnect {
-
 
 #ifdef YDB_MSG_ZEROCOPY_SUPPORTED 
 // Whether the cmsg received from error queue is of the IPv4 or IPv6 levels.
@@ -35,12 +35,13 @@ static bool CmsgIsZeroCopy(const cmsghdr& cmsg) {
     auto serr = reinterpret_cast<const sock_extended_err*> CMSG_DATA(&cmsg);
     return serr->ee_errno == 0 && serr->ee_origin == SO_EE_ORIGIN_ZEROCOPY;
 }
+
 #endif
 
-ssize_t TZeroCopyCtx::ProcessSend(TWriteRefVec& wbuffers, TStreamSocket& socket, NActors::IInterconnectMetrics* counters) {
+ssize_t TZeroCopyCtx::ProcessSend(TWriteRefVec& wbuffers, TStreamSocket& socket, NActors::IInterconnectMetrics* counters, bool tryZc) {
 
 #ifdef YDB_MSG_ZEROCOPY_SUPPORTED 
-    if (ZcState == ZC_OK) {
+    if (ZcState == ZC_OK && tryZc) {
         ssize_t zcPos = -1;
         for (size_t i = 0; i < wbuffers.size(); i++) {
             if (wbuffers[i].Size > ZcThreshold) {
@@ -108,70 +109,86 @@ ssize_t TZeroCopyCtx::ProcessSend(TWriteRefVec& wbuffers, TStreamSocket& socket,
 
 #ifdef YDB_MSG_ZEROCOPY_SUPPORTED 
 void TZeroCopyCtx::ProcessErrQueue(NInterconnect::TStreamSocket& socket) {
-        // Mostly copy-paste from grpc ERRQUEUE handling
-        struct iovec iov;
-        iov.iov_base = nullptr;
-        iov.iov_len = 0;
-        struct msghdr msg;
-        msg.msg_name = nullptr;
-        msg.msg_namelen = 0;
-        msg.msg_iov = &iov;
-        msg.msg_iovlen = 0;
-        msg.msg_flags = 0;
+    if (ZcState == ZC_DISABLED || ZcState == ZC_DISABLED_HIDEN_COPY) {
+        return;
+    }
 
-        constexpr size_t cmsg_alloc_space =
-            CMSG_SPACE(sizeof(scm_timestamping)) +
-            CMSG_SPACE(sizeof(sock_extended_err) + sizeof(sockaddr_in)) +
-            CMSG_SPACE(32 * NLA_ALIGN(NLA_HDRLEN + sizeof(uint64_t)));
+    // Mostly copy-paste from grpc ERRQUEUE handling
+    struct iovec iov;
+    iov.iov_base = nullptr;
+    iov.iov_len = 0;
+    struct msghdr msg;
+    msg.msg_name = nullptr;
+    msg.msg_namelen = 0;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 0;
+    msg.msg_flags = 0;
 
-        union {
-            char rbuf[cmsg_alloc_space];
-            struct cmsghdr align;
-        } aligned_buf;
-        msg.msg_control = aligned_buf.rbuf;
-        ssize_t r;
-        while (true) {
-            msg.msg_controllen = sizeof(aligned_buf.rbuf);
+    constexpr size_t cmsg_alloc_space =
+        CMSG_SPACE(sizeof(scm_timestamping)) +
+        CMSG_SPACE(sizeof(sock_extended_err) + sizeof(sockaddr_in)) +
+        CMSG_SPACE(32 * NLA_ALIGN(NLA_HDRLEN + sizeof(uint64_t)));
 
-            do {
-                r = socket.RecvErrQueue(&msg);
-            } while (r == -EINTR);
-      
-            if (r == -EAGAIN || r == -EWOULDBLOCK) {
-            //if (r < 0) {
-                break;
-            }
+    union {
+        char rbuf[cmsg_alloc_space];
+        struct cmsghdr align;
+    } aligned_buf;
+    msg.msg_control = aligned_buf.rbuf;
+    ssize_t r;
+    while (true) {
+        msg.msg_controllen = sizeof(aligned_buf.rbuf);
+
+        do {
+            r = socket.RecvErrQueue(&msg);
+        } while (r == -EINTR);
+
+        if (r == -EAGAIN || r == -EWOULDBLOCK) {
+        //if (r < 0) {
+            break;
+        }
             
-            if ((msg.msg_flags & MSG_CTRUNC) != 0) {
-                ZcState = ZC_DISABLED_ERR;
-                LastErr += "errqueue message was truncated;";
-            }
+        if ((msg.msg_flags & MSG_CTRUNC) != 0) {
+            ZcState = ZC_DISABLED_ERR;
+            LastErr += "errqueue message was truncated;";
+        }
       
-            if (msg.msg_controllen == 0) {
-                // There was no control message found. It was probably spurious.
-                break;
-            }
-            for (auto cmsg = CMSG_FIRSTHDR(&msg); cmsg && cmsg->cmsg_len;
-                cmsg = CMSG_NXTHDR(&msg, cmsg)) {
-                if (CmsgIsZeroCopy(*cmsg)) {
-                    auto serr = reinterpret_cast<struct sock_extended_err*>(CMSG_DATA(cmsg));
-                    if (serr->ee_data < serr->ee_info) {
-                        // Incorrect data inside kernel
-                        continue;
-                    }
-                    ui64 sends = serr->ee_data - serr->ee_info + 1;
-                    ZcSend += sends;
-                    if (serr->ee_code == SO_EE_CODE_ZEROCOPY_COPIED) {
-                        ZcSendWithCopy += sends;
-                    }
+        if (msg.msg_controllen == 0) {
+            // There was no control message found. It was probably spurious.
+            break;
+        }
+        for (auto cmsg = CMSG_FIRSTHDR(&msg); cmsg && cmsg->cmsg_len;
+            cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+            if (CmsgIsZeroCopy(*cmsg)) {
+                auto serr = reinterpret_cast<struct sock_extended_err*>(CMSG_DATA(cmsg));
+                if (serr->ee_data < serr->ee_info) {
+                    // Incorrect data inside kernel
+                    continue;
+                }
+                ui64 sends = serr->ee_data - serr->ee_info + 1;
+                ZcSend += sends;
+                if (serr->ee_code == SO_EE_CODE_ZEROCOPY_COPIED) {
+                    ZcSendWithCopy += sends;
                 }
             }
         }
-        if (ZcState == ZC_CONGESTED && ZcSend == ZcUncompletedSend) {
-            ZcState =ZC_OK;
-        }
     }
+    if (ZcState == ZC_CONGESTED && ZcSend == ZcUncompletedSend) {
+        ZcState = ZC_OK;
+    }
+    if (ZcState == ZC_OK && ZcSendWithCopy == ZcSend && ZcSend > 10) {
+        ZcState = ZC_DISABLED_HIDEN_COPY;
+    }
+}
+
 #endif
+
+void TZeroCopyCtx::ResetState() {
+    if (ZcState == ZC_DISABLED) {
+        return;
+    }
+
+    ZcState = ZC_OK;
+}
 
 TString TZeroCopyCtx::GetCurrentState() const {
     switch (ZcState) {
@@ -179,6 +196,8 @@ TString TZeroCopyCtx::GetCurrentState() const {
             return "Disabled";
         case ZC_DISABLED_ERR:
             return "DisabledErr";
+        case ZC_DISABLED_HIDEN_COPY:
+            return "DisabledHidenCopy";
         case ZC_OK:
             return "Ok";
         case ZC_CONGESTED:

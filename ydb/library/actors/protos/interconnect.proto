@@ -106,6 +106,7 @@ message THandshakeSuccess {
     optional bool UseXdcShuffle = 17;
 
     optional bytes CompatibilityInfo = 15;
+    optional bool UseZeroCopySend = 18;
 }
 
 message THandshakeReply {
