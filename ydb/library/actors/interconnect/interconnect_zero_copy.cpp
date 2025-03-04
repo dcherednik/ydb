@@ -175,6 +175,10 @@ void TZeroCopyCtx::ProcessErrQueue(NInterconnect::TStreamSocket& socket) {
     if (ZcState == ZC_CONGESTED && ZcSend == ZcUncompletedSend) {
         ZcState = ZC_OK;
     }
+
+    // There are no reliable way to check is both side of tcp connection
+    // place on the same host (consider different namespaces is the same host too).
+    // So we check that each transfer has hidden copy.
     if (ZcState == ZC_OK && ZcSendWithCopy == ZcSend && ZcSend > 10) {
         ZcState = ZC_DISABLED_HIDEN_COPY;
     }
