@@ -235,6 +235,13 @@ namespace NActors {
     }
 
     void TInterconnectSessionTCP::SetNewConnection(TEvHandshakeDone::TPtr& ev) {
+        ZeroCopyCtx->Pause();
+        if (XdcSocket && !ZeroCopyCtx->IsZcCompleted()) {
+            Cerr << "SENDER: " << ev->Sender << Endl;
+            ZeroCopyCtx->ProcessErrQueue(*XdcSocket);
+            TActivationContext::Schedule(TDuration::MicroSeconds(1000), ev.Release());
+            return;
+        }
         if (ReceiverId) {
             // upon destruction of input session actor invoke this callback again
             ReestablishConnection(std::move(ev), false, TDisconnectReason::NewSession());

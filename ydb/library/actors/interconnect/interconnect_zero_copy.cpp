@@ -114,13 +114,10 @@ void TZeroCopyCtx::ProcessErrQueue(NInterconnect::TStreamSocket& socket) {
     }
 
     // Mostly copy-paste from grpc ERRQUEUE handling
-    struct iovec iov;
-    iov.iov_base = nullptr;
-    iov.iov_len = 0;
     struct msghdr msg;
     msg.msg_name = nullptr;
     msg.msg_namelen = 0;
-    msg.msg_iov = &iov;
+    msg.msg_iov = nullptr;
     msg.msg_iovlen = 0;
     msg.msg_flags = 0;
 
@@ -160,6 +157,7 @@ void TZeroCopyCtx::ProcessErrQueue(NInterconnect::TStreamSocket& socket) {
             cmsg = CMSG_NXTHDR(&msg, cmsg)) {
             if (CmsgIsZeroCopy(*cmsg)) {
                 auto serr = reinterpret_cast<struct sock_extended_err*>(CMSG_DATA(cmsg));
+                fprintf(stderr, "err queue: %d ... %d\n", serr->ee_data, serr->ee_info);
                 if (serr->ee_data < serr->ee_info) {
                     // Incorrect data inside kernel
                     continue;
@@ -178,7 +176,7 @@ void TZeroCopyCtx::ProcessErrQueue(NInterconnect::TStreamSocket& socket) {
 
     // There are no reliable way to check is both side of tcp connection
     // place on the same host (consider different namespaces is the same host too).
-    // So we check that each transfer has hidden copy.
+    // So we check that each transfer has hidden copy during some period.
     if (ZcState == ZC_OK && ZcSendWithCopy == ZcSend && ZcSend > 10) {
         ZcState = ZC_DISABLED_HIDEN_COPY;
     }
@@ -186,18 +184,30 @@ void TZeroCopyCtx::ProcessErrQueue(NInterconnect::TStreamSocket& socket) {
 
 #endif
 
+void TZeroCopyCtx::Pause() {
+    if (ZcState == ZC_DISABLED) {
+        return;
+    }
+    ZcState = ZC_DISABLED_TMP;
+}
+
 void TZeroCopyCtx::ResetState() {
     if (ZcState == ZC_DISABLED) {
         return;
     }
 
     ZcState = ZC_OK;
+    ZcSend = 0;
+    ZcUncompletedSend = 0;
+    ZcSendWithCopy = 0;
 }
 
 TString TZeroCopyCtx::GetCurrentState() const {
     switch (ZcState) {
         case ZC_DISABLED:
             return "Disabled";
+        case ZC_DISABLED_TMP:
+            return "DisabledTmp";
         case ZC_DISABLED_ERR:
             return "DisabledErr";
         case ZC_DISABLED_HIDEN_COPY:

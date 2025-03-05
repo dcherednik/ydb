@@ -22,6 +22,8 @@ public:
     ui64 GetZcSend() const { return ZcSend; }
     ui64 GetZcSendWithCopy() const { return ZcSendWithCopy; }
     TString GetCurrentState() const;
+    bool IsZcCompleted() const { return ZcUncompletedSend == ZcSend; }
+    void Pause();
 
 private:
     ui64 ZcUncompletedSend = 0;
@@ -31,6 +33,7 @@ private:
     TString LastErr;
     enum {
         ZC_DISABLED,            // ZeroCopy featute is disabled by used
+        ZC_DISABLED_TMP,        // Temporary disabled due to transient state in the interconect (new session for example)
         ZC_DISABLED_ERR,        // We got some errors and unable to use ZC for this connection
         ZC_DISABLED_HIDEN_COPY, // The socket associated with loopback, or unsupported nic
                                 // ZC send is not possible in this case and cause hiden copy inside kernel.
