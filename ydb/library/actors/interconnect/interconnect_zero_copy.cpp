@@ -73,6 +73,7 @@ ssize_t TZeroCopyCtx::ProcessSend(TWriteRefVec& wbuffers, TStreamSocket& socket,
                 if (ZcState == ZC_OK && front.Size > ZcThreshold) {
                     flags = MSG_ZEROCOPY;
                 }
+                Cerr << "ZcState: " << GetCurrentState() << Endl;
                 r = socket.SendWithFlags(front.Data, front.Size, flags);
 #else
                 r = socket.SendWithFlags(front.Data, front.Size, 0);

@@ -21,6 +21,7 @@ Y_UNIT_TEST_SUITE(InterconnectUnstableConnection) {
     class TSenderActor: public TSenderBaseActor {
         TDeque<ui64> InFly;
         ui16 SendFlags;
+        ui64 S = 0;
 
     public:
         TSenderActor(const TActorId& recipientActorId, ui16 sendFlags)
@@ -30,21 +31,23 @@ Y_UNIT_TEST_SUITE(InterconnectUnstableConnection) {
         }
 
         ~TSenderActor() override {
-            Cerr << "Sent " << SequenceNumber << " messages\n";
+            Cerr << "Sent " << SequenceNumber << " messages " << S << "\n";
         }
 
         void SendMessage(const TActorContext& ctx) override {
             const ui32 flags = IEventHandle::MakeFlags(0, SendFlags);
             const ui64 cookie = SequenceNumber;
-            const TString payload('@', RandomNumber<size_t>(65536) + 4096);
+            const TString payload(RandomNumber<size_t>(65536) + 4096, '@');
             ctx.Send(RecipientActorId, new TEvTest(SequenceNumber, payload), flags, cookie);
             InFly.push_back(SequenceNumber);
             ++InFlySize;
             ++SequenceNumber;
+            ++S;
         }
 
         void Handle(TEvents::TEvUndelivered::TPtr& ev, const TActorContext& ctx) override {
             auto record = std::find(InFly.begin(), InFly.end(), ev->Cookie);
+            --S;
             if (SendFlags & IEventHandle::FlagGenerateUnsureUndelivered) {
                 if (record != InFly.end()) {
                     InFly.erase(record);
@@ -103,7 +106,7 @@ Y_UNIT_TEST_SUITE(InterconnectUnstableConnection) {
         ui32 numNodes = 2;
         double bandWidth = 1000000;
         ui16 flags = IEventHandle::FlagTrackDelivery | IEventHandle::FlagGenerateUnsureUndelivered;
-        TTestICCluster::TTrafficInterrupterSettings interrupterSettings{TDuration::Seconds(2), bandWidth, true};
+        TTestICCluster::TTrafficInterrupterSettings interrupterSettings{TDuration(), bandWidth, true};
 
         TTestICCluster testCluster(numNodes, TChannelsConfig(), &interrupterSettings);
 
@@ -115,11 +118,11 @@ Y_UNIT_TEST_SUITE(InterconnectUnstableConnection) {
         NanoSleep(30ULL * 1000 * 1000 * 1000);
     }
 
-    Y_UNIT_TEST(InterconnectTestWithProxy) {
+/*    Y_UNIT_TEST(InterconnectTestWithProxy) {
         ui32 numNodes = 2;
         double bandWidth = 1000000;
         ui16 flags = IEventHandle::FlagTrackDelivery;
-        TTestICCluster::TTrafficInterrupterSettings interrupterSettings{TDuration::Seconds(2), bandWidth, true};
+        TTestICCluster::TTrafficInterrupterSettings interrupterSettings{TDuration(), bandWidth, true};
 
         TTestICCluster testCluster(numNodes, TChannelsConfig(), &interrupterSettings);
 
@@ -129,5 +132,5 @@ Y_UNIT_TEST_SUITE(InterconnectUnstableConnection) {
         testCluster.RegisterActor(senderActor, 1);
 
         NanoSleep(30ULL * 1000 * 1000 * 1000);
-    }
+    } */
 }

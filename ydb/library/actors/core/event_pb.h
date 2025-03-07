@@ -244,6 +244,7 @@ namespace NActors {
         }
 
         bool AllowExternalDataChannel() const {
+            Cerr << "AllowExternalDataChannel: " << TotalPayloadSize << Endl;
             return TotalPayloadSize >= 4096;
         }
 
@@ -429,7 +430,7 @@ namespace NActors {
         }
 
         TEventSerializationInfo CreateSerializationInfo() const override {
-            return CreateSerializationInfoImpl(PreSerializedData.size(), static_cast<const TEv&>(*this).AllowExternalDataChannel(), TBase::GetPayload(), Record.ByteSize());
+            return CreateSerializationInfoImpl(PreSerializedData.size(), static_cast<const TEv&>(*this).AllowExternalDataChannel(), TBase::GetPayload(), Record.Bytize());
         }
     };
 

@@ -258,6 +258,9 @@ namespace NActors {
         SendBufferSize = ev->Get()->Socket->GetSendBufferSize();
         Socket = std::move(ev->Get()->Socket);
         XdcSocket = std::move(ev->Get()->XdcSocket);
+        if (XdcSocket) {
+            Cerr << "XDCSOCKET ENABLED: " << (int)(*XdcSocket) << Endl;
+        }
 
         ZeroCopyCtx->ResetState();
 

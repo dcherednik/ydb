@@ -239,13 +239,16 @@ namespace NActors {
                     // all data goes inline
                     IsPartInline = true;
                     PartLenRemain = Max<size_t>();
+                    Cerr << "ZZZ1: empty " << sections.empty() << " .   " << Params.UseExternalDataChannel << "  " << SerializationInfo->IsExtendedFormat<< Endl;
                 } else if (!Params.UseXdcShuffle) {
                     // when UseXdcShuffle feature is not supported by the remote side, we transfer whole event over XDC
                     IsPartInline = false;
                     PartLenRemain = Max<size_t>();
+                    Cerr << "ZZZ2" << Endl;
                 } else {
                     Y_ABORT_UNLESS(SectionIndex < sections.size());
                     IsPartInline = sections[SectionIndex].IsInline;
+                    Cerr << "ZZZ3 " << IsPartInline << " . " << SectionIndex <<  Endl;
                     while (SectionIndex < sections.size() && IsPartInline == sections[SectionIndex].IsInline) {
                         PartLenRemain += sections[SectionIndex].Size;
                         ++SectionIndex;
@@ -253,6 +256,7 @@ namespace NActors {
                 }
             }
 
+            //Cerr << "IsPArtInline: " << IsPartInline << Endl;
             // serialize bytes
             const auto complete = IsPartInline
                 ? FeedInlinePayload(task, event, weightConsumed)

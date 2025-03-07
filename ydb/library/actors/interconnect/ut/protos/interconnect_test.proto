@@ -3,6 +3,7 @@ package NInterconnectTest;
 message TEvTest {
     optional uint64 SequenceNumber = 1;
     optional bytes Payload = 2;
+    repeated uint32 PayloadId = 3;
 }
 
 message TEvTestChan {

@@ -376,6 +376,7 @@ namespace NActors {
     TEventSerializationInfo CreateSerializationInfoImpl(size_t preserializedSize, bool allowExternalDataChannel, const TVector<TRope> &payload, ssize_t recordSize) {
             TEventSerializationInfo info;
             info.IsExtendedFormat = static_cast<bool>(payload);
+            Cerr << "CreateSerializationInfoImpl: " << allowExternalDataChannel << Endl;
 
             if (allowExternalDataChannel) {
                 if (payload) {
