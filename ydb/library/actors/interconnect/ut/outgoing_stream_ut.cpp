@@ -6,7 +6,7 @@
 #define Ctest Cnull
 
 Y_UNIT_TEST_SUITE(OutgoingStream) {
-    Y_UNIT_TEST(Basic) {
+    void OutgoingTest(bool withExternal) {
         std::vector<char> buffer;
         buffer.resize(4 << 20);
 
@@ -22,9 +22,12 @@ Y_UNIT_TEST_SUITE(OutgoingStream) {
             size_t sendOffset = 0; // offset to base
             size_t pending = 0; // number of bytes in queue
 
-            NInterconnect::TOutgoingStreamT<4096> stream;
+            using TOutStream = NInterconnect::TOutgoingStreamT<4096>;
+            TOutStream stream;
 
             size_t numRewindsRemain = 10;
+            
+            ui32 zcTransferId = 42;
 
             while (base != buffer.size()) {
                 const size_t bytesToEnd = buffer.size() - (base + sendOffset);
@@ -37,7 +40,15 @@ Y_UNIT_TEST_SUITE(OutgoingStream) {
 
                 const size_t maxBuffers = 128;
                 std::vector<NActors::TConstIoVec> iov;
-                stream.ProduceIoVec(iov, maxBuffers, Max<size_t>());
+                std::vector<TOutStream::TBufController> ctrl;
+                stream.ProduceIoVec(iov, maxBuffers, Max<size_t>(), withExternal ? &ctrl : nullptr);
+
+                if (withExternal) {
+                    if (ctrl.size() > 0) {
+                        ctrl[0].Update(zcTransferId++);
+                        //Cerr << ctrl.size() << Endl;
+                    }
+                }
                 size_t offset = base + sendOffset;
                 for (const auto& [ptr, len] : iov) {
                     UNIT_ASSERT(memcmp(buffer.data() + offset, ptr, len) == 0);
@@ -143,5 +154,13 @@ Y_UNIT_TEST_SUITE(OutgoingStream) {
                 Ctest << Endl;
             }
         }
+    }
+
+    Y_UNIT_TEST(Basic) {
+        OutgoingTest(false);
+    }
+
+    Y_UNIT_TEST(WithExternalLife) {
+        OutgoingTest(true);
     }
 }

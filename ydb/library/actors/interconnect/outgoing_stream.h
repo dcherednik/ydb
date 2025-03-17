@@ -9,12 +9,13 @@ namespace NInterconnect {
 
     template<size_t TotalSize>
     class TOutgoingStreamT {
-        static constexpr size_t BufferSize = TotalSize - sizeof(ui32) * 2;
+        static constexpr size_t BufferSize = TotalSize - sizeof(ui32) * 3;
 
         struct TBuffer {
             char Data[BufferSize];
             ui32 RefCount;
             ui32 Index;
+            ui32 HandlerId;
 
             struct TDeleter {
                 void operator ()(TBuffer *buffer) const {
@@ -37,8 +38,30 @@ namespace NInterconnect {
         size_t SendQueuePos = 0;
         size_t SendOffset = 0;
         size_t UnsentBytes = 0;
+        std::vector<TBuffer* const> SharedBufIndex;
 
     public:
+        /*
+         * Allow to share buffer between socket to produce safe zero copy operation
+         */
+        class TBufController {
+        public:
+            explicit TBufController(TBuffer* b)
+                : Buffer(b)
+            {}
+
+            /*
+             * Set or update external handler id. For example sequence number of successful MSG_ZEROCOPY call
+             * Should not be called in period between MakeBuffersShared and before CompleteSharedBuffers call
+             */
+            void Update(ui32 handler) {
+                Buffer->HandlerId = handler;
+            }
+
+        private:
+            TBuffer * const Buffer;
+        };
+
         operator bool() const {
             return SendQueuePos != SendQueue.size();
         }
@@ -76,6 +99,7 @@ namespace NInterconnect {
                 Y_ABORT_UNLESS(AppendBuffer);
                 AppendBuffer->RefCount = 1; // through AppendBuffer pointer
                 AppendBuffer->Index = Buffers.size() - 1;
+                AppendBuffer->HandlerId = 0;
                 AppendOffset = 0;
             }
             return {AppendBuffer->Data + AppendOffset, Min(maxLen, BufferSize - AppendOffset)};
@@ -158,12 +182,16 @@ namespace NInterconnect {
             UnsentBytes = 0;
         }
 
-        template<typename T>
-        void ProduceIoVec(T& container, size_t maxItems, size_t maxBytes) {
+        template<typename T, typename U = std::vector<TBufController>>
+        void ProduceIoVec(T& container, size_t maxItems, size_t maxBytes, U* controllers = nullptr) {
             size_t offset = SendOffset;
             for (auto it = SendQueue.begin() + SendQueuePos; it != SendQueue.end() && std::size(container) < maxItems && maxBytes; ++it) {
                 const TContiguousSpan span = it->Span.SubSpan(offset, maxBytes);
                 container.push_back(NActors::TConstIoVec{span.data(), span.size()});
+                if (controllers) {
+                    Y_DEBUG_ABORT_UNLESS(it->Buffer);
+                    controllers->push_back(TBufController(it->Buffer));
+                }
                 offset = 0;
                 maxBytes -= span.size();
             }
@@ -222,6 +250,25 @@ namespace NInterconnect {
             }
         }
 
+        /*
+         * This method scan all buffers and RefCount for buffers where external handler was set.
+         */
+        void MakeBuffersShared() {
+            for (const auto& b : Buffers) {
+                if (Buffers->RefCount != 0 && Buffers->HandlerId != 0) {
+                    Buffers->RefCount = 1;
+                    SharedBufIndex.emplace_back(Buffers);
+                }
+            }
+        }
+
+        void CompleteSharedBuffers() {
+            for (size_t i = 0; i < Buffers.size(); i++) {
+                DropBufferReference(Buffers[i]);
+            }
+            Buffers.clear();
+        }
+
     private:
         void AppendAcquiredSpan(TContiguousSpan span) {
             TBuffer *buffer = AppendBuffer;
@@ -266,6 +313,7 @@ namespace NInterconnect {
             }
         }
     };
+    
 
     using TOutgoingStream = TOutgoingStreamT<32768>;
 
