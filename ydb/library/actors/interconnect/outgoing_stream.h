@@ -55,6 +55,10 @@ namespace NInterconnect {
              * Should not be called in period between MakeBuffersShared and before CompleteSharedBuffers call
              */
             void Update(ui32 handler) {
+                if (!Buffer) {
+                    return;
+                }
+                Cerr << "UpdateHandler: " << handler << Endl;
                 Buffer->HandlerId = handler;
             }
 
@@ -189,7 +193,6 @@ namespace NInterconnect {
                 const TContiguousSpan span = it->Span.SubSpan(offset, maxBytes);
                 container.push_back(NActors::TConstIoVec{span.data(), span.size()});
                 if (controllers) {
-                    Y_DEBUG_ABORT_UNLESS(it->Buffer);
                     controllers->push_back(TBufController(it->Buffer));
                 }
                 offset = 0;
@@ -255,9 +258,9 @@ namespace NInterconnect {
          */
         void MakeBuffersShared() {
             for (const auto& b : Buffers) {
-                if (Buffers->RefCount != 0 && Buffers->HandlerId != 0) {
-                    Buffers->RefCount = 1;
-                    SharedBufIndex.emplace_back(Buffers);
+                if (b->RefCount != 0 && b->HandlerId != 0) {
+                    b->RefCount++;
+                    SharedBufIndex.emplace_back(b.get());
                 }
             }
         }

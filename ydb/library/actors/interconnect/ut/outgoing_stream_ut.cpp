@@ -24,6 +24,7 @@ Y_UNIT_TEST_SUITE(OutgoingStream) {
 
             using TOutStream = NInterconnect::TOutgoingStreamT<4096>;
             TOutStream stream;
+            bool zcSync = false;
 
             size_t numRewindsRemain = 10;
             
@@ -44,7 +45,7 @@ Y_UNIT_TEST_SUITE(OutgoingStream) {
                 stream.ProduceIoVec(iov, maxBuffers, Max<size_t>(), withExternal ? &ctrl : nullptr);
 
                 if (withExternal) {
-                    if (ctrl.size() > 0) {
+                    if (ctrl.size() > 0 && zcSync == false) {
                         ctrl[0].Update(zcTransferId++);
                         //Cerr << ctrl.size() << Endl;
                     }
@@ -78,7 +79,8 @@ Y_UNIT_TEST_SUITE(OutgoingStream) {
                     ADVANCE,
                     REWIND,
                     DROP,
-                    BOOKMARK
+                    BOOKMARK,
+                    EMULATE_ZC_USAGE,
                 };
 
                 std::vector<EAction> actions;
@@ -93,6 +95,10 @@ Y_UNIT_TEST_SUITE(OutgoingStream) {
                 }
                 actions.push_back(EAction::ADVANCE);
                 actions.push_back(EAction::DROP);
+
+                if (withExternal) {
+                    actions.push_back(EAction::EMULATE_ZC_USAGE);
+                }
 
                 switch (actions[rng() % actions.size()]) {
                     case EAction::COPY_APPEND: {
@@ -143,11 +149,20 @@ Y_UNIT_TEST_SUITE(OutgoingStream) {
                         break;
                     }
 
-                    case EAction::BOOKMARK:
+                    case EAction::BOOKMARK: {
                         Ctest << " BOOKMARK nextDataLen# " << nextDataLen;
                         auto bookmark = stream.Bookmark(nextDataLen);
                         stream.WriteBookmark(std::move(bookmark), {nextData, nextDataLen});
                         pending += nextDataLen;
+                        break;
+                    }
+
+                    case EAction::EMULATE_ZC_USAGE:
+                        Cerr << "EMULATE_ZC" << Endl;
+                        if (zcSync == false) {
+                            stream.MakeBuffersShared();
+                            zcSync = true;
+                        }
                         break;
                 }
 
