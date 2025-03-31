@@ -1,6 +1,7 @@
 #include "interconnect_tcp_proxy.h"
 #include "interconnect_tcp_session.h"
 #include "interconnect_handshake.h"
+#include "interconnect_zc_processor.h"
 
 #include <ydb/library/actors/core/probes.h>
 #include <ydb/library/actors/core/log.h>
@@ -58,6 +59,7 @@ namespace NActors {
             as->Send(id, event.Release());
         };
         Pool.ConstructInPlace(Proxy->Common, std::move(destroyCallback));
+        ZcProcessor = NInterconnect::TInterconnectZcProcessor::Register(TActivationContext::AsActorContext());
         ChannelScheduler.ConstructInPlace(Proxy->PeerNodeId, Proxy->Common->ChannelsConfig, Proxy->Metrics,
             Proxy->Common->Settings.MaxSerializedEventSize, Params);
 
@@ -115,6 +117,8 @@ namespace NActors {
         if (!Subscribers.empty()) {
             Proxy->Metrics->SubSubscribersCount(Subscribers.size());
         }
+
+        ZcProcessor->ScheduleTermination();
 
         TActor::PassAway();
     }

@@ -32,6 +32,10 @@
 #include <unordered_set>
 #include <unordered_map>
 
+namespace NInterconnect {
+    class TInterconnectZcProcessor;
+}
+
 namespace NActors {
 
     static constexpr ui64 StarvingInRowForNotEnoughCpu = 32;
@@ -653,6 +657,8 @@ namespace NActors {
         double Utilized = 0;
         double Starving = 0;
         NHPTimer::STime PartUpdateTimestamp = 0;
+
+        NInterconnect::TInterconnectZcProcessor* ZcProcessor;
 
         void UpdateState(std::optional<EState> newState = std::nullopt) {
             if (!newState || *newState != State) {
