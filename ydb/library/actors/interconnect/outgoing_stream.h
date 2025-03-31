@@ -9,13 +9,12 @@ namespace NInterconnect {
 
     template<size_t TotalSize>
     class TOutgoingStreamT {
-        static constexpr size_t BufferSize = TotalSize - sizeof(ui32) * 3;
+        static constexpr size_t BufferSize = TotalSize - sizeof(ui32) * 2;
 
         struct TBuffer {
             char Data[BufferSize];
             ui32 RefCount;
             ui32 Index;
-            ui32 HandlerId;
 
             struct TDeleter {
                 void operator ()(TBuffer *buffer) const {
@@ -29,6 +28,7 @@ namespace NInterconnect {
         struct TSendChunk {
             TContiguousSpan Span;
             TBuffer *Buffer;
+            ui32* ZcTransferId = nullptr;
         };
 
         std::vector<std::unique_ptr<TBuffer, typename TBuffer::TDeleter>> Buffers;
@@ -38,7 +38,6 @@ namespace NInterconnect {
         size_t SendQueuePos = 0;
         size_t SendOffset = 0;
         size_t UnsentBytes = 0;
-        std::vector<TBuffer* const> SharedBufIndex;
 
     public:
         /*
@@ -46,8 +45,8 @@ namespace NInterconnect {
          */
         class TBufController {
         public:
-            explicit TBufController(TBuffer* b)
-                : Buffer(b)
+            explicit TBufController(ui32* b)
+                : ZcTransferId(b)
             {}
 
             /*
@@ -55,15 +54,14 @@ namespace NInterconnect {
              * Should not be called in period between MakeBuffersShared and before CompleteSharedBuffers call
              */
             void Update(ui32 handler) {
-                if (!Buffer) {
+                if (!ZcTransferId) {
                     return;
                 }
-                Cerr << "UpdateHandler: " << handler << Endl;
-                Buffer->HandlerId = handler;
+                *ZcTransferId = handler;
             }
 
         private:
-            TBuffer * const Buffer;
+            ui32 * const ZcTransferId;
         };
 
         operator bool() const {
@@ -103,7 +101,6 @@ namespace NInterconnect {
                 Y_ABORT_UNLESS(AppendBuffer);
                 AppendBuffer->RefCount = 1; // through AppendBuffer pointer
                 AppendBuffer->Index = Buffers.size() - 1;
-                AppendBuffer->HandlerId = 0;
                 AppendOffset = 0;
             }
             return {AppendBuffer->Data + AppendOffset, Min(maxLen, BufferSize - AppendOffset)};
@@ -119,7 +116,7 @@ namespace NInterconnect {
             }
         }
 
-        void Append(TContiguousSpan span) {
+        void Append(TContiguousSpan span, ui32* const zcHandle) {
             if (AppendBuffer && span.data() == AppendBuffer->Data + AppendOffset) { // the only valid case to use previously acquired span
                 AppendAcquiredSpan(span);
             } else {
@@ -137,6 +134,7 @@ namespace NInterconnect {
 #endif
                 AppendSpanWithGlueing(span, nullptr);
             }
+            SendQueue.back().ZcTransferId = zcHandle;
         }
 
         void Write(TContiguousSpan in) {
@@ -192,8 +190,8 @@ namespace NInterconnect {
             for (auto it = SendQueue.begin() + SendQueuePos; it != SendQueue.end() && std::size(container) < maxItems && maxBytes; ++it) {
                 const TContiguousSpan span = it->Span.SubSpan(offset, maxBytes);
                 container.push_back(NActors::TConstIoVec{span.data(), span.size()});
-                if (controllers) {
-                    controllers->push_back(TBufController(it->Buffer));
+                if (controllers && it->ZcTransferId) {
+                    controllers->push_back(TBufController(it->ZcTransferId));
                 }
                 offset = 0;
                 maxBytes -= span.size();
@@ -250,18 +248,6 @@ namespace NInterconnect {
             }
             for (; it != SendQueue.end(); ++it, offset = 0) {
                 callback(it->Span.SubSpan(offset, Max<size_t>()));
-            }
-        }
-
-        /*
-         * This method scan all buffers and RefCount for buffers where external handler was set.
-         */
-        void MakeBuffersShared() {
-            for (const auto& b : Buffers) {
-                if (b->RefCount != 0 && b->HandlerId != 0) {
-                    b->RefCount++;
-                    SharedBufIndex.emplace_back(b.get());
-                }
             }
         }
 

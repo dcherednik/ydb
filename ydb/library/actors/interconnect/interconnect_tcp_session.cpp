@@ -58,7 +58,7 @@ namespace NActors {
             as->Send(id, event.Release());
         };
         Pool.ConstructInPlace(Proxy->Common, std::move(destroyCallback));
-        ChannelScheduler.ConstructInPlace(Proxy->PeerNodeId, Proxy->Common->ChannelsConfig, Proxy->Metrics, *Pool,
+        ChannelScheduler.ConstructInPlace(Proxy->PeerNodeId, Proxy->Common->ChannelsConfig, Proxy->Metrics,
             Proxy->Common->Settings.MaxSerializedEventSize, Params);
 
         LOG_INFO(*TlsActivationContext, NActorsServices::INTERCONNECT_STATUS, "[%u] session created", Proxy->PeerNodeId);
@@ -98,7 +98,7 @@ namespace NActors {
         DelayedEvents.clear();
 
         ChannelScheduler->ForEach([&](TEventOutputChannel& channel) {
-            channel.NotifyUndelivered();
+            channel.NotifyUndelivered(Pool.GetRef());
         });
 
         if (ReceiverId) {
@@ -133,7 +133,7 @@ namespace NActors {
         auto& oChannel = ChannelScheduler->GetOutputChannel(evChannel);
         const bool wasWorking = oChannel.IsWorking();
 
-        const auto [dataSize, event] = oChannel.Push(*ev);
+        const auto [dataSize, event] = oChannel.Push(*ev, Pool.GetRef());
         LWTRACK(ForwardEvent, event->Orbit, Proxy->PeerNodeId, event->Descr.Type, event->Descr.Flags, LWACTORID(event->Descr.Recipient), LWACTORID(event->Descr.Sender), event->Descr.Cookie, event->EventSerializedSize);
 
         TotalOutputQueueSize += dataSize;
@@ -926,7 +926,7 @@ namespace NActors {
         XdcStream.DropFront(bytesDroppedFromXdc);
         if (lastDroppedSerial) {
             ChannelScheduler->ForEach([&](TEventOutputChannel& channel) {
-                channel.DropConfirmed(*lastDroppedSerial);
+                channel.DropConfirmed(*lastDroppedSerial, Pool.GetRef());
             });
         }
 
