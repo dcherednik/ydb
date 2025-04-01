@@ -58,8 +58,8 @@ namespace NActors {
         auto destroyCallback = [as = TActivationContext::ActorSystem(), id = Proxy->Common->DestructorId](THolder<IEventBase> event) {
             as->Send(id, event.Release());
         };
-        Pool.ConstructInPlace(Proxy->Common, std::move(destroyCallback));
-        ZcProcessor = NInterconnect::TInterconnectZcProcessor::Register(TActivationContext::AsActorContext());
+        Pool = std::make_unique<TEventHolderPool>(Proxy->Common, std::move(destroyCallback));
+        ZcProcessor = NInterconnect::TInterconnectZcProcessor::Register(TActivationContext::AsActorContext(), true);
         ChannelScheduler.ConstructInPlace(Proxy->PeerNodeId, Proxy->Common->ChannelsConfig, Proxy->Metrics,
             Proxy->Common->Settings.MaxSerializedEventSize, Params);
 
@@ -100,7 +100,7 @@ namespace NActors {
         DelayedEvents.clear();
 
         ChannelScheduler->ForEach([&](TEventOutputChannel& channel) {
-            channel.NotifyUndelivered(Pool.GetRef());
+            channel.ProcessUndelivered(*Pool, *ZcProcessor);
         });
 
         if (ReceiverId) {
@@ -118,7 +118,7 @@ namespace NActors {
             Proxy->Metrics->SubSubscribersCount(Subscribers.size());
         }
 
-        ZcProcessor->ScheduleTermination();
+        IActor::InvokeOtherActor(*ZcProcessor, &NInterconnect::TInterconnectZcProcessor::ScheduleTermination, std::move(Pool));
 
         TActor::PassAway();
     }
@@ -137,7 +137,7 @@ namespace NActors {
         auto& oChannel = ChannelScheduler->GetOutputChannel(evChannel);
         const bool wasWorking = oChannel.IsWorking();
 
-        const auto [dataSize, event] = oChannel.Push(*ev, Pool.GetRef());
+        const auto [dataSize, event] = oChannel.Push(*ev, *Pool);
         LWTRACK(ForwardEvent, event->Orbit, Proxy->PeerNodeId, event->Descr.Type, event->Descr.Flags, LWACTORID(event->Descr.Recipient), LWACTORID(event->Descr.Sender), event->Descr.Cookie, event->EventSerializedSize);
 
         TotalOutputQueueSize += dataSize;
@@ -699,6 +699,25 @@ namespace NActors {
         WriteBlockedByFullSendBuffer = writeBlockedByFullSendBuffer;
     }
 
+    ssize_t TInterconnectSessionTCP::HandleWriteResult(ssize_t r, const TString& err) {
+        if (r > 0) {
+            return r;
+        } else if (-r != EAGAIN && -r != EWOULDBLOCK) {
+            const TString message = r == 0 ? "connection closed by peer"
+                : err ? err
+                : Sprintf("socket: %s", strerror(-r));
+            LOG_NOTICE_NET(Proxy->PeerNodeId, "%s", message.data());
+            if (r == 0 && !NumEventsInQueue && LastConfirmed == OutputCounter) {
+                Terminate(TDisconnectReason::EndOfStream());
+            } else {
+                ReestablishConnectionWithHandshake(r == 0 ? TDisconnectReason::EndOfStream() : TDisconnectReason::FromErrno(-r));
+            }
+            return 0; // error indicator
+        } else {
+            return -1; // temporary error
+        }
+    }
+
     ssize_t TInterconnectSessionTCP::Write(NInterconnect::TOutgoingStream& stream, NInterconnect::TStreamSocket& socket,
             size_t maxBytes) {
         LWPROBE_IF_TOO_LONG(SlowICWriteData, Proxy->PeerNodeId, ms) {
@@ -717,9 +736,14 @@ namespace NActors {
 #endif
             }
 
-            TStackVec<TConstIoVec, iovLimit> wbuffers;
+            // Zero copy socket write has noticiable overhead for memory managment inside kernel.
+            // So now we try to use ZC only for XDC
+            const bool tryZc = XdcSocket ? (int)socket == (int)*XdcSocket : false;
 
-            stream.ProduceIoVec(wbuffers, maxElementsInIOV, maxBytes);
+            TStackVec<TConstIoVec, iovLimit> wbuffers;
+            TStackVec<NInterconnect::TOutgoingStream::TBufController, iovLimit> zeroCtrl;
+
+            stream.ProduceIoVec(wbuffers, maxElementsInIOV, maxBytes, tryZc ? &zeroCtrl : nullptr);
             Y_ABORT_UNLESS(!wbuffers.empty());
 
             TString err;
@@ -727,35 +751,24 @@ namespace NActors {
             { // issue syscall with timing
                 const ui64 begin = GetCycleCountFast();
 
-                do {
-                    if (wbuffers.size() == 1) {
-                        auto& front = wbuffers.front();
-                        r = socket.Send(front.Data, front.Size, &err);
-                    } else {
-                        r = socket.WriteV(reinterpret_cast<const iovec*>(wbuffers.data()), wbuffers.size());
-                    }
-                } while (r == -EINTR);
+                if (zeroCtrl) {
+                    r = ZcProcessor->ProcessSend(wbuffers, socket, zeroCtrl);
+                } else {
+                    do {
+                        if (wbuffers.size() == 1) {
+                            auto& front = wbuffers.front();
+                            r = socket.Send(front.Data, front.Size, &err);
+                        } else {
+                            r = socket.WriteV(reinterpret_cast<const iovec*>(wbuffers.data()), wbuffers.size());
+                        }
+                    } while (r == -EINTR);
+                }
 
                 const ui64 end = GetCycleCountFast();
                 Proxy->Metrics->IncSendSyscalls((end - begin) * 1'000'000 / GetCyclesPerMillisecond());
             }
 
-            if (r > 0) {
-                return r;
-            } else if (-r != EAGAIN && -r != EWOULDBLOCK) {
-                const TString message = r == 0 ? "connection closed by peer"
-                    : err ? err
-                    : Sprintf("socket: %s", strerror(-r));
-                LOG_NOTICE_NET(Proxy->PeerNodeId, "%s", message.data());
-                if (r == 0 && !NumEventsInQueue && LastConfirmed == OutputCounter) {
-                    Terminate(TDisconnectReason::EndOfStream());
-                } else {
-                    ReestablishConnectionWithHandshake(r == 0 ? TDisconnectReason::EndOfStream() : TDisconnectReason::FromErrno(-r));
-                }
-                return 0; // error indicator
-            } else {
-                return -1; // temporary error
-            }
+            return HandleWriteResult(r, err);
         }
 
         Y_UNREACHABLE();
@@ -930,7 +943,7 @@ namespace NActors {
         XdcStream.DropFront(bytesDroppedFromXdc);
         if (lastDroppedSerial) {
             ChannelScheduler->ForEach([&](TEventOutputChannel& channel) {
-                channel.DropConfirmed(*lastDroppedSerial, Pool.GetRef());
+                channel.DropConfirmed(*lastDroppedSerial, *Pool);
             });
         }
 

@@ -190,7 +190,7 @@ namespace NInterconnect {
             for (auto it = SendQueue.begin() + SendQueuePos; it != SendQueue.end() && std::size(container) < maxItems && maxBytes; ++it) {
                 const TContiguousSpan span = it->Span.SubSpan(offset, maxBytes);
                 container.push_back(NActors::TConstIoVec{span.data(), span.size()});
-                if (controllers && it->ZcTransferId) {
+                if (controllers) {
                     controllers->push_back(TBufController(it->ZcTransferId));
                 }
                 offset = 0;

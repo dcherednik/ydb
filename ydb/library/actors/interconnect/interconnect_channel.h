@@ -15,6 +15,10 @@
 #include "packet.h"
 #include "event_holder_pool.h"
 
+namespace NInterconnect {
+    class TInterconnectZcProcessor;
+}
+
 namespace NActors {
 #pragma pack(push, 1)
 
@@ -104,7 +108,7 @@ namespace NActors {
             return OutputQueueSize;
         }
 
-        void NotifyUndelivered(TEventHolderPool& pool);
+        void ProcessUndelivered(TEventHolderPool& pool, NInterconnect::TInterconnectZcProcessor& zc);
 
         const ui32 PeerNodeId;
         const ui16 ChannelId;

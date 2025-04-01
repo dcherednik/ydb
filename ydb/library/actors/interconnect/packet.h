@@ -99,7 +99,7 @@ struct TEventHolder : TNonCopyable {
     ui32 EventActuallySerialized;
     mutable NLWTrace::TOrbit Orbit;
     NWilson::TSpan Span;
-    ui32 ZcTransferId;
+    ui32 ZcTransferId; //id of zero copy transfer. In case of RDMA it is a place where some internal handle can be stored to identify events
 
     ui32 Fill(IEventHandle& ev);
 

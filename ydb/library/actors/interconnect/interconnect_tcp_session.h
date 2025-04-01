@@ -499,6 +499,7 @@ namespace NActors {
         void Handle(TEvPollerReady::TPtr& ev);
         void Handle(TEvPollerRegisterResult::TPtr ev);
         void WriteData();
+        ssize_t HandleWriteResult(ssize_t r, const TString& err);
         ssize_t Write(NInterconnect::TOutgoingStream& stream, NInterconnect::TStreamSocket& socket, size_t maxBytes);
 
         ui32 MakePacket(bool data, TMaybe<ui64> pingMask = {});
@@ -558,7 +559,7 @@ namespace NActors {
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
         const TSessionParams Params;
-        TMaybe<TEventHolderPool> Pool;
+        std::unique_ptr<TEventHolderPool> Pool;
         TMaybe<TChannelScheduler> ChannelScheduler;
         ui64 TotalOutputQueueSize;
         bool OutputStuckFlag;

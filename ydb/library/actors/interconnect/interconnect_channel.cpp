@@ -1,4 +1,5 @@
 #include "interconnect_channel.h"
+#include "interconnect_zc_processor.h"
 
 #include <ydb/library/actors/core/events.h>
 #include <ydb/library/actors/core/executor_thread.h>
@@ -337,7 +338,7 @@ namespace NActors {
         return complete;
     }
 
-    void TEventOutputChannel::NotifyUndelivered(TEventHolderPool& pool) {
+    void TEventOutputChannel::ProcessUndelivered(TEventHolderPool& pool, NInterconnect::TInterconnectZcProcessor& zc) {
         LOG_DEBUG_IC_SESSION("ICOCH89", "Notyfying about Undelivered messages! NotYetConfirmed size: %zu, Queue size: %zu", NotYetConfirmed.size(), Queue.size());
         if (State == EState::BODY && Queue.front().Event) {
             Y_ABORT_UNLESS(!Chunker.IsComplete()); // chunk must have an event being serialized
@@ -352,6 +353,10 @@ namespace NActors {
                 item.ForwardOnNondelivery(true);
             }
         }
+
+        // Events in the NotYetConfirmed may be actualy not sended by kernel.
+        // In case of enabled ZC we need to wait kernel send task to be completed before reusing buffers
+        zc.ExtractToSafeTermination(NotYetConfirmed);
         pool.Release(NotYetConfirmed);
         for (auto& item : Queue) {
             item.ForwardOnNondelivery(false);
