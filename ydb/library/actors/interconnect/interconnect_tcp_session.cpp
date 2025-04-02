@@ -678,6 +678,10 @@ namespace NActors {
             }
         }
 
+        if (XdcSocket) {
+            ZcProcessor->ProcessNotification(*XdcSocket);
+        }
+
         if (const size_t w = process(XdcStream, XdcSocket, XdcPollerToken, &ReceiveContext->XdcWriteBlocked, maxBytesAtOnce)) {
             XdcBytesSent += w;
             XdcOffset += w;

@@ -19,7 +19,7 @@
 #endif
 
 // Whether the cmsg received from error queue is of the IPv4 or IPv6 levels.
-/*
+
 static bool CmsgIsIpLevel(const cmsghdr& cmsg) {
     return (cmsg.cmsg_level == SOL_IPV6 && cmsg.cmsg_type == IPV6_RECVERR) ||
        (cmsg.cmsg_level == SOL_IP && cmsg.cmsg_type == IP_RECVERR);
@@ -31,7 +31,7 @@ static bool CmsgIsZeroCopy(const cmsghdr& cmsg) {
     }
     auto serr = reinterpret_cast<const sock_extended_err*> CMSG_DATA(&cmsg);
     return serr->ee_errno == 0 && serr->ee_origin == SO_EE_ORIGIN_ZEROCOPY;
-} */
+}
 
 #endif
 
@@ -39,8 +39,8 @@ namespace NInterconnect {
 using NActors::TEvents;
 
 #ifdef YDB_MSG_ZEROCOPY_SUPPORTED
- /*
-void TInterconnectZcProcessor::ProcessErrQueue(NInterconnect::TStreamSocket& socket) {
+
+void TInterconnectZcProcessor::DoProcessErrQueue(NInterconnect::TStreamSocket& socket) {
     if (ZcState == ZC_DISABLED || ZcState == ZC_DISABLED_HIDEN_COPY) {
         return;
     }
@@ -112,7 +112,7 @@ void TInterconnectZcProcessor::ProcessErrQueue(NInterconnect::TStreamSocket& soc
     if (ZcState == ZC_OK && ZcSendWithCopy == ZcSend && ZcSend > 10) {
         ZcState = ZC_DISABLED_HIDEN_COPY;
     }
-} */
+}
 
 #endif
 
@@ -128,6 +128,10 @@ size_t AdjustLen(std::span<const TConstIoVec> wbuf, std::span<const TOutgoingStr
     }
 
     return l;
+}
+
+void TInterconnectZcProcessor::ProcessNotification(NInterconnect::TStreamSocket& socket) {
+    DoProcessErrQueue(socket);
 }
 
 TInterconnectZcProcessor*  TInterconnectZcProcessor::Register(const NActors::TActorContext &ctx, bool enabled) {

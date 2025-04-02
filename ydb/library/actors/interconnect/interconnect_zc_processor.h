@@ -24,6 +24,7 @@ public:
     void ScheduleTermination(std::unique_ptr<NActors::TEventHolderPool>&& pool);
     void SetSocket();
     ssize_t ProcessSend(std::span<TConstIoVec> wbuf, TStreamSocket& socket, std::span<TOutgoingStream::TBufController> ctrl);
+    void ProcessNotification(NInterconnect::TStreamSocket& socket);
 
     constexpr static ui32 ZcThreshold = 16384;
 
@@ -42,6 +43,8 @@ private:
 
     std::list<TEventHolder> Delayed;
     std::unique_ptr<NActors::TEventHolderPool> Pool;
+
+    void DoProcessErrQueue(NInterconnect::TStreamSocket& socket);
 
 
     enum {

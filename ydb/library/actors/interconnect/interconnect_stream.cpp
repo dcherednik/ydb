@@ -130,6 +130,15 @@ namespace NInterconnect {
     }
 
     ssize_t
+    TStreamSocket::RecvErrQueue(struct msghdr* msg) const {
+        const auto ret = ::recvmsg(Descriptor, msg, MSG_ERRQUEUE);
+        if (ret < 0)
+            return -LastSocketError();
+
+        return ret;
+    }
+
+    ssize_t
     TStreamSocket::Recv(void* buf, size_t len, TString* /*err*/) const {
         const auto ret = ::recv(Descriptor, static_cast<char*>(buf), int(len), 0);
         if (ret < 0)

@@ -60,6 +60,7 @@ namespace NInterconnect {
         virtual ssize_t ReadV(const struct iovec* iov, int iovcnt) const;
 
         ssize_t SendWithFlags(const void* msg, size_t len, int flags) const;
+        ssize_t RecvErrQueue(struct msghdr* msg) const;
 
         int Connect(const TAddress& addr) const;
         int Connect(const NAddr::IRemoteAddr* addr) const;
