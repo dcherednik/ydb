@@ -2,6 +2,7 @@
 
 #include <ydb/library/actors/core/events.h>
 #include <ydb/library/actors/core/hfunc.h>
+#include <ydb/library/actors/core/actor_bootstrapped.h>
 
 #if defined (__linux__)
 
@@ -134,37 +135,6 @@ void TInterconnectZcProcessor::ProcessNotification(NInterconnect::TStreamSocket&
     DoProcessErrQueue(socket);
 }
 
-TInterconnectZcProcessor*  TInterconnectZcProcessor::Register(const NActors::TActorContext &ctx, bool enabled) {
-    TInterconnectZcProcessor* actor(new TInterconnectZcProcessor(enabled));
-    // must be registered on the same mailbox!
-    ctx.RegisterWithSameMailbox(actor);
-    return actor;
-}
-
-STFUNC(TInterconnectZcProcessor::StateFunc) {
-    STRICT_STFUNC_BODY(
-        cFunc(TEvents::TEvPoisonPill::EventType, HandlePoison)
-    )
-}
-
-void TInterconnectZcProcessor::ScheduleTermination(std::unique_ptr<NActors::TEventHolderPool>&& pool) {
-    Pool = std::move(pool);
-    Cerr << "ScheduleTermination: " << Delayed.size() << Endl;
-}
-
-void TInterconnectZcProcessor::HandlePoison() {
-}
-
-void TInterconnectZcProcessor::ExtractToSafeTermination(std::list<TEventHolder>& queue) {
-    for (std::list<TEventHolder>::iterator event = queue.begin(); event != queue.end();) {
-        if (event->ZcTransferId > LastZcConfirmed) {
-            Delayed.splice(Delayed.end(), queue, event++);
-        } else {
-            event++;
-        }
-    }
-}
-
 ssize_t TInterconnectZcProcessor::ProcessSend(std::span<TConstIoVec> wbuf, TStreamSocket& socket,
     std::span<TOutgoingStream::TBufController> ctrl)
 {
@@ -222,8 +192,7 @@ ssize_t TInterconnectZcProcessor::ProcessSend(std::span<TConstIoVec> wbuf, TStre
 }
 
 TInterconnectZcProcessor::TInterconnectZcProcessor(bool enabled)
-    : TActor(&TInterconnectZcProcessor::StateFunc)
-    , ZcState(enabled ? ZC_OK : ZC_DISABLED)
+    : ZcState(enabled ? ZC_OK : ZC_DISABLED)
 {}
 
 TString TInterconnectZcProcessor::GetCurrentState() const {
@@ -239,6 +208,87 @@ TString TInterconnectZcProcessor::GetCurrentState() const {
         case ZC_CONGESTED:
             return "Congested";
     }
+}
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+
+// Guard part.
+// We must guarantee liveness of buffers used for zc
+// until enqueued zc operation completed by kernel
+
+class TGuardActor : public NActors::TActorBootstrapped<TGuardActor> {
+public:
+    TGuardActor(ui64 send, std::list<TEventHolder>&& queue,
+        TIntrusivePtr<NInterconnect::TStreamSocket> socket,
+        std::unique_ptr<NActors::TEventHolderPool>&& pool);
+    void Bootstrap();
+    STATEFN(StateFunc);
+private:
+    void DoGc();
+    const ui64 ZcSend;
+    std::list<TEventHolder> Delayed;
+    TIntrusivePtr<NInterconnect::TStreamSocket> Socket;
+    std::unique_ptr<NActors::TEventHolderPool> Pool;
+};
+
+TGuardActor::TGuardActor(ui64 send, std::list<TEventHolder>&& queue,
+    TIntrusivePtr<NInterconnect::TStreamSocket> socket,
+    std::unique_ptr<NActors::TEventHolderPool>&& pool)
+    : ZcSend(send)
+    , Delayed(std::move(queue))
+    , Socket(socket)
+    , Pool(std::move(pool))
+{}
+
+void TGuardActor::Bootstrap() {
+    Become(&TThis::StateFunc);
+    Send(SelfId(), new TEvents::TEvWakeup);
+}
+
+void TGuardActor::DoGc()
+{
+    Cerr << ZcSend << Endl;
+
+    Send(SelfId(), new TEvents::TEvWakeup);
+}
+
+STFUNC(TGuardActor::StateFunc) {
+    STRICT_STFUNC_BODY(
+        cFunc(TEvents::TEvWakeup::EventType, DoGc)
+    )
+}
+
+class TGuardRunner : public IZcGuard {
+public:
+    TGuardRunner(ui64 send, ui64 confirmed)
+        : ZcSend(send)
+        , Confirmed(confirmed)
+    {}
+    void ExtractToSafeTermination(std::list<TEventHolder>& queue) noexcept override {
+        for (std::list<TEventHolder>::iterator event = queue.begin(); event != queue.end();) {
+            if (event->ZcTransferId > Confirmed) {
+                Delayed.splice(Delayed.end(), queue, event++);
+            } else {
+                event++;
+            }
+        }
+    }
+    void Terminate(std::unique_ptr<NActors::TEventHolderPool>&& pool, TIntrusivePtr<NInterconnect::TStreamSocket> socket, const NActors::TActorContext &ctx) override {
+        // must be registered on the same mailbox!
+        ctx.RegisterWithSameMailbox(new TGuardActor(ZcSend, std::move(Delayed), socket, std::move(pool)));
+    }
+private:
+    const ui64 ZcSend;
+    const ui64 Confirmed;
+    std::list<TEventHolder> Delayed;
+};
+
+
+std::unique_ptr<IZcGuard> TInterconnectZcProcessor::GetGuard()
+{
+    return std::make_unique<TGuardRunner>(ZcSend, LastZcConfirmed);
 }
 
 }

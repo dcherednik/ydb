@@ -11,20 +11,22 @@
 
 namespace NInterconnect {
 
-class TInterconnectZcProcessor  : public NActors::TActor<TInterconnectZcProcessor> {
-    TInterconnectZcProcessor(bool enabled);
-
+class IZcGuard {
 public:
+    virtual ~IZcGuard() = default;
+    virtual void ExtractToSafeTermination(std::list<TEventHolder>& queue) noexcept = 0;
+    virtual void Terminate(std::unique_ptr<NActors::TEventHolderPool>&& pool, TIntrusivePtr<NInterconnect::TStreamSocket> socket, const NActors::TActorContext &ctx) = 0;
+};
+
+class TInterconnectZcProcessor { //}  : public NActors::TActor<TInterconnectZcProcessor> {
+public:
+    TInterconnectZcProcessor(bool enabled);
     ~TInterconnectZcProcessor() = default;
 
-    void ExtractToSafeTermination(std::list<TEventHolder>& queue);
-
-    // Start termination process. All buffers will be freed only after compliting zero copy tasks
-    // Can be called only once
-    void ScheduleTermination(std::unique_ptr<NActors::TEventHolderPool>&& pool);
-    void SetSocket();
     ssize_t ProcessSend(std::span<TConstIoVec> wbuf, TStreamSocket& socket, std::span<TOutgoingStream::TBufController> ctrl);
     void ProcessNotification(NInterconnect::TStreamSocket& socket);
+
+    std::unique_ptr<IZcGuard> GetGuard();
 
     ui64 GetZcSend() const { return ZcSend; }
     ui64 GetZcSendWithCopy() const { return ZcSendWithCopy; }
@@ -39,17 +41,13 @@ private:
 
     TString LastErr;
 
-    STATEFN(StateFunc);
 
-    void HandlePoison();
 
     ui32 LastZcConfirmed;
 
-    std::list<TEventHolder> Delayed;
-    std::unique_ptr<NActors::TEventHolderPool> Pool;
+
 
     void DoProcessErrQueue(NInterconnect::TStreamSocket& socket);
-
 
     enum {
         ZC_DISABLED,            // ZeroCopy featute is disabled by used
@@ -62,9 +60,6 @@ private:
     } ZcState;
 
     bool ZcStateIsOk() { return ZcState == ZC_OK; }
-
-public:
-    static TInterconnectZcProcessor* Register(const NActors::TActorContext &ctx, bool enabled); 
 };
 
 }

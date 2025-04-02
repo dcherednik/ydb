@@ -38,6 +38,7 @@ namespace NActors {
         , OutputStuckFlag(false)
         , OutputQueueUtilization(16)
         , OutputCounter(0ULL)
+        , ZcProcessor(true)
     {
         Proxy->Metrics->SetConnected(0);
         PartUpdateTimestamp = GetCycleCountFast();
@@ -59,7 +60,6 @@ namespace NActors {
             as->Send(id, event.Release());
         };
         Pool = std::make_unique<TEventHolderPool>(Proxy->Common, std::move(destroyCallback));
-        ZcProcessor = NInterconnect::TInterconnectZcProcessor::Register(TActivationContext::AsActorContext(), true);
         ChannelScheduler.ConstructInPlace(Proxy->PeerNodeId, Proxy->Common->ChannelsConfig, Proxy->Metrics,
             Proxy->Common->Settings.MaxSerializedEventSize, Params);
 
@@ -99,8 +99,10 @@ namespace NActors {
         }
         DelayedEvents.clear();
 
+        std::unique_ptr<NInterconnect::IZcGuard> guard = ZcProcessor.GetGuard();
+
         ChannelScheduler->ForEach([&](TEventOutputChannel& channel) {
-            channel.ProcessUndelivered(*Pool, *ZcProcessor);
+            channel.ProcessUndelivered(*Pool, *guard);
         });
 
         if (ReceiverId) {
@@ -118,7 +120,7 @@ namespace NActors {
             Proxy->Metrics->SubSubscribersCount(Subscribers.size());
         }
 
-        IActor::InvokeOtherActor(*ZcProcessor, &NInterconnect::TInterconnectZcProcessor::ScheduleTermination, std::move(Pool));
+        guard->Terminate(std::move(Pool), XdcSocket, TlsActivationContext->AsActorContext());
 
         TActor::PassAway();
     }
@@ -679,7 +681,7 @@ namespace NActors {
         }
 
         if (XdcSocket) {
-            ZcProcessor->ProcessNotification(*XdcSocket);
+            ZcProcessor.ProcessNotification(*XdcSocket);
         }
 
         if (const size_t w = process(XdcStream, XdcSocket, XdcPollerToken, &ReceiveContext->XdcWriteBlocked, maxBytesAtOnce)) {
@@ -756,7 +758,7 @@ namespace NActors {
                 const ui64 begin = GetCycleCountFast();
 
                 if (zeroCtrl) {
-                    r = ZcProcessor->ProcessSend(wbuffers, socket, zeroCtrl);
+                    r = ZcProcessor.ProcessSend(wbuffers, socket, zeroCtrl);
                 } else {
                     do {
                         if (wbuffers.size() == 1) {
@@ -1385,12 +1387,12 @@ namespace NActors {
                             MON_VAR(Subscribers.size())
                             TABLER() {
                                 TABLED() { str << "ZeroCopy state"; }
-                                TABLED() { str << ZcProcessor->GetCurrentState(); }
+                                TABLED() { str << ZcProcessor.GetCurrentState(); }
                             }
                             TABLER() {
                                 TABLED() { str << "ZeroCopy send with copy / send total"; }
                                 TABLED() {
-                                    str << Sprintf("%d / %d", ZcProcessor->GetZcSendWithCopy(), ZcProcessor->GetZcSend());
+                                    str << Sprintf("%d / %d", ZcProcessor.GetZcSendWithCopy(), ZcProcessor.GetZcSend());
                                 }
                             }
                         }

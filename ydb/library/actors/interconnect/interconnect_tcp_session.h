@@ -20,6 +20,7 @@
 #include <util/datetime/cputimer.h>
 
 #include "interconnect_impl.h"
+#include "interconnect_zc_processor.h"
 #include "poller_tcp.h"
 #include "poller_actor.h"
 #include "interconnect_channel.h"
@@ -659,7 +660,7 @@ namespace NActors {
         double Starving = 0;
         NHPTimer::STime PartUpdateTimestamp = 0;
 
-        NInterconnect::TInterconnectZcProcessor* ZcProcessor;
+        NInterconnect::TInterconnectZcProcessor ZcProcessor;
 
         void UpdateState(std::optional<EState> newState = std::nullopt) {
             if (!newState || *newState != State) {

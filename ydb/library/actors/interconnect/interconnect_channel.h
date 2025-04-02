@@ -16,7 +16,7 @@
 #include "event_holder_pool.h"
 
 namespace NInterconnect {
-    class TInterconnectZcProcessor;
+    class IZcGuard;
 }
 
 namespace NActors {
@@ -108,7 +108,7 @@ namespace NActors {
             return OutputQueueSize;
         }
 
-        void ProcessUndelivered(TEventHolderPool& pool, NInterconnect::TInterconnectZcProcessor& zc);
+        void ProcessUndelivered(TEventHolderPool& pool, NInterconnect::IZcGuard& zg);
 
         const ui32 PeerNodeId;
         const ui16 ChannelId;
