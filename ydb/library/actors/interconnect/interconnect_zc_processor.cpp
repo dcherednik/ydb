@@ -165,7 +165,6 @@ void TInterconnectZcProcessor::ExtractToSafeTermination(std::list<TEventHolder>&
     }
 }
 
-
 ssize_t TInterconnectZcProcessor::ProcessSend(std::span<TConstIoVec> wbuf, TStreamSocket& socket,
     std::span<TOutgoingStream::TBufController> ctrl)
 {
@@ -226,5 +225,20 @@ TInterconnectZcProcessor::TInterconnectZcProcessor(bool enabled)
     : TActor(&TInterconnectZcProcessor::StateFunc)
     , ZcState(enabled ? ZC_OK : ZC_DISABLED)
 {}
+
+TString TInterconnectZcProcessor::GetCurrentState() const {
+    switch (ZcState) {
+        case ZC_DISABLED:
+            return "Disabled";
+        case ZC_DISABLED_ERR:
+            return "DisabledErr";
+        case ZC_DISABLED_HIDEN_COPY:
+            return "DisabledHidenCopy";
+        case ZC_OK:
+            return "Ok";
+        case ZC_CONGESTED:
+            return "Congested";
+    }
+}
 
 }

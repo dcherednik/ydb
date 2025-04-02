@@ -1383,6 +1383,16 @@ namespace NActors {
                             MON_VAR(GetTotalInflightAmountOfData())
                             MON_VAR(GetCloseOnIdleTimeout())
                             MON_VAR(Subscribers.size())
+                            TABLER() {
+                                TABLED() { str << "ZeroCopy state"; }
+                                TABLED() { str << ZcProcessor->GetCurrentState(); }
+                            }
+                            TABLER() {
+                                TABLED() { str << "ZeroCopy send with copy / send total"; }
+                                TABLED() {
+                                    str << Sprintf("%d / %d", ZcProcessor->GetZcSendWithCopy(), ZcProcessor->GetZcSend());
+                                }
+                            }
                         }
                     }
                 }
