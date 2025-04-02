@@ -48,9 +48,13 @@ Y_UNIT_TEST_SUITE(OutgoingStream) {
                 stream.ProduceIoVec(iov, maxBuffers, Max<size_t>(), withExternal ? &ctrl : nullptr);
 
                 if (withExternal) {
-                    if (ctrl.size() > 0 && zcSync == false) {
-                        ctrl[0].Update(++zcTransferId);
-                        Cerr << ctrl.size() << Endl;
+                    Y_ABORT_UNLESS(iov.size() == ctrl.size());
+                    if (zcSync == false) {
+                        for (auto& x : ctrl) {
+                            if (x.ZcReady()) {
+                                x.Update(++zcTransferId);
+                            }
+                        }
                     }
                 }
                 size_t offset = base + sendOffset;

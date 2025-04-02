@@ -60,6 +60,10 @@ namespace NInterconnect {
                 *ZcTransferId = handler;
             }
 
+            bool ZcReady() const {
+                return ZcTransferId != nullptr;
+            }
+
         private:
             ui32 * const ZcTransferId;
         };
