@@ -4,6 +4,8 @@
 #include <ydb/library/actors/core/hfunc.h>
 #include <ydb/library/actors/core/actor_bootstrapped.h>
 
+#include <variant>
+
 #if defined (__linux__)
 
 #define YDB_MSG_ZEROCOPY_SUPPORTED 1
@@ -41,11 +43,21 @@ using NActors::TEvents;
 
 #ifdef YDB_MSG_ZEROCOPY_SUPPORTED
 
-void TInterconnectZcProcessor::DoProcessErrQueue(NInterconnect::TStreamSocket& socket) {
-    if (ZcState == ZC_DISABLED || ZcState == ZC_DISABLED_HIDEN_COPY) {
-        return;
-    }
+struct TErr {
+    explicit TErr(const TString& err)
+        : Reason(err)
+    {} 
+    TString Reason;
+};
 
+struct TZcSendResult {
+    ui64 SendNum = 0;
+    ui64 SendWithCopyNum = 0;
+};
+
+using TProcessErrQueueResult = std::variant<TErr, TZcSendResult>;
+
+static TProcessErrQueueResult DoProcessErrQueue(NInterconnect::TStreamSocket& socket) {
     // Mostly copy-paste from grpc ERRQUEUE handling
     struct msghdr msg;
     msg.msg_name = nullptr;
@@ -64,8 +76,11 @@ void TInterconnectZcProcessor::DoProcessErrQueue(NInterconnect::TStreamSocket& s
         struct cmsghdr align;
     } aligned_buf;
     msg.msg_control = aligned_buf.rbuf;
-    ssize_t r;
+
+    TZcSendResult result;
+
     while (true) {
+        ssize_t r;
         msg.msg_controllen = sizeof(aligned_buf.rbuf);
 
         do {
@@ -78,14 +93,15 @@ void TInterconnectZcProcessor::DoProcessErrQueue(NInterconnect::TStreamSocket& s
         }
 
         if ((msg.msg_flags & MSG_CTRUNC) != 0) {
-            ZcState = ZC_DISABLED_ERR;
-            LastErr += "errqueue message was truncated;";
+            return TErr("errqueue message was truncated");
         }
 
         if (msg.msg_controllen == 0) {
             // There was no control message found. It was probably spurious.
             break;
         }
+
+
         for (auto cmsg = CMSG_FIRSTHDR(&msg); cmsg && cmsg->cmsg_len;
             cmsg = CMSG_NXTHDR(&msg, cmsg)) {
             if (CmsgIsZeroCopy(*cmsg)) {
@@ -96,23 +112,14 @@ void TInterconnectZcProcessor::DoProcessErrQueue(NInterconnect::TStreamSocket& s
                     continue;
                 }
                 ui64 sends = serr->ee_data - serr->ee_info + 1;
-                ZcSend += sends;
+                result.SendNum += sends;
                 if (serr->ee_code == SO_EE_CODE_ZEROCOPY_COPIED) {
-                    ZcSendWithCopy += sends;
+                    result.SendWithCopyNum += sends;
                 }
             }
         }
     }
-    if (ZcState == ZC_CONGESTED && ZcSend == ZcUncompletedSend) {
-        ZcState = ZC_OK;
-    }
-
-    // There are no reliable way to check is both side of tcp connection
-    // place on the same host (consider different namespaces is the same host too).
-    // So we check that each transfer has hidden copy during some period.
-    if (ZcState == ZC_OK && ZcSendWithCopy == ZcSend && ZcSend > 10) {
-        ZcState = ZC_DISABLED_HIDEN_COPY;
-    }
+    return result;
 }
 
 #endif
@@ -131,8 +138,30 @@ size_t AdjustLen(std::span<const TConstIoVec> wbuf, std::span<const TOutgoingStr
     return l;
 }
 
-void TInterconnectZcProcessor::ProcessNotification(NInterconnect::TStreamSocket& socket) {
-    DoProcessErrQueue(socket);
+void TInterconnectZcProcessor::DoProcessNotification(NInterconnect::TStreamSocket& socket) {
+    const TProcessErrQueueResult res = DoProcessErrQueue(socket);
+
+    std::visit(TOverloaded{
+        [this](const TErr& err) {
+            ZcState = ZC_DISABLED_ERR;
+            LastErr += err.Reason;
+        },
+        [this](const TZcSendResult& res) {
+            ZcSend += res.SendNum;
+            ZcSendWithCopy += res.SendWithCopyNum;
+        }}, res);
+    
+
+    if (ZcState == ZC_CONGESTED && ZcSend == ZcUncompletedSend) {
+        ZcState = ZC_OK;
+    }
+
+    // There are no reliable way to check is both side of tcp connection
+    // place on the same host (consider different namespaces is the same host too).
+    // So we check that each transfer has hidden copy during some period.
+    if (ZcState == ZC_OK && ZcSendWithCopy == ZcSend && ZcSend > 10) {
+        ZcState = ZC_DISABLED_HIDEN_COPY;
+    }
 }
 
 ssize_t TInterconnectZcProcessor::ProcessSend(std::span<TConstIoVec> wbuf, TStreamSocket& socket,
@@ -211,7 +240,6 @@ TString TInterconnectZcProcessor::GetCurrentState() const {
 }
 
 
-
 ///////////////////////////////////////////////////////////////////////////////
 
 // Guard part.
@@ -220,23 +248,25 @@ TString TInterconnectZcProcessor::GetCurrentState() const {
 
 class TGuardActor : public NActors::TActorBootstrapped<TGuardActor> {
 public:
-    TGuardActor(ui64 send, std::list<TEventHolder>&& queue,
+    TGuardActor(ui64 uncompleted, ui64 confirmed, std::list<TEventHolder>&& queue,
         TIntrusivePtr<NInterconnect::TStreamSocket> socket,
         std::unique_ptr<NActors::TEventHolderPool>&& pool);
     void Bootstrap();
     STATEFN(StateFunc);
 private:
     void DoGc();
-    const ui64 ZcSend;
+    const ui64 Uncompleted;
+    ui64 Confirmed;
     std::list<TEventHolder> Delayed;
     TIntrusivePtr<NInterconnect::TStreamSocket> Socket;
     std::unique_ptr<NActors::TEventHolderPool> Pool;
 };
 
-TGuardActor::TGuardActor(ui64 send, std::list<TEventHolder>&& queue,
+TGuardActor::TGuardActor(ui64 uncompleted, ui64 confirmed, std::list<TEventHolder>&& queue,
     TIntrusivePtr<NInterconnect::TStreamSocket> socket,
     std::unique_ptr<NActors::TEventHolderPool>&& pool)
-    : ZcSend(send)
+    : Uncompleted(uncompleted)
+    , Confirmed(confirmed)
     , Delayed(std::move(queue))
     , Socket(socket)
     , Pool(std::move(pool))
@@ -244,14 +274,29 @@ TGuardActor::TGuardActor(ui64 send, std::list<TEventHolder>&& queue,
 
 void TGuardActor::Bootstrap() {
     Become(&TThis::StateFunc);
-    Send(SelfId(), new TEvents::TEvWakeup);
+    DoGc();
 }
 
 void TGuardActor::DoGc()
 {
-    Cerr << ZcSend << Endl;
+    Cerr << "DoGc" << Uncompleted << Endl;
 
-    Send(SelfId(), new TEvents::TEvWakeup);
+    const TProcessErrQueueResult res = DoProcessErrQueue(*Socket);
+
+    std::visit(TOverloaded{
+        [](const TErr& err) {
+            Cerr << err.Reason << Endl;
+        },
+        [this](const TZcSendResult& res) {
+            Confirmed += res.SendNum;
+            if (Confirmed >= Uncompleted) {
+                Pool->Release(Delayed);
+                Pool->Trim();
+                TActor::PassAway();
+            } else {
+                Schedule(TDuration::MilliSeconds(100), new TEvents::TEvWakeup());
+            }
+        }}, res);
 }
 
 STFUNC(TGuardActor::StateFunc) {
@@ -262,8 +307,8 @@ STFUNC(TGuardActor::StateFunc) {
 
 class TGuardRunner : public IZcGuard {
 public:
-    TGuardRunner(ui64 send, ui64 confirmed)
-        : ZcSend(send)
+    TGuardRunner(ui64 uncompleted, ui64 confirmed)
+        : Uncompleted(uncompleted)
         , Confirmed(confirmed)
     {}
     void ExtractToSafeTermination(std::list<TEventHolder>& queue) noexcept override {
@@ -277,10 +322,10 @@ public:
     }
     void Terminate(std::unique_ptr<NActors::TEventHolderPool>&& pool, TIntrusivePtr<NInterconnect::TStreamSocket> socket, const NActors::TActorContext &ctx) override {
         // must be registered on the same mailbox!
-        ctx.RegisterWithSameMailbox(new TGuardActor(ZcSend, std::move(Delayed), socket, std::move(pool)));
+        ctx.RegisterWithSameMailbox(new TGuardActor(Uncompleted, Confirmed, std::move(Delayed), socket, std::move(pool)));
     }
 private:
-    const ui64 ZcSend;
+    const ui64 Uncompleted;
     const ui64 Confirmed;
     std::list<TEventHolder> Delayed;
 };
@@ -288,7 +333,7 @@ private:
 
 std::unique_ptr<IZcGuard> TInterconnectZcProcessor::GetGuard()
 {
-    return std::make_unique<TGuardRunner>(ZcSend, LastZcConfirmed);
+    return std::make_unique<TGuardRunner>(ZcUncompletedSend, ZcSend);
 }
 
 }

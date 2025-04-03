@@ -1,7 +1,5 @@
 #pragma once
 
-#include <ydb/library/actors/core/actor.h>
-
 #include "interconnect_common.h"
 
 #include "event_holder_pool.h"
@@ -18,13 +16,17 @@ public:
     virtual void Terminate(std::unique_ptr<NActors::TEventHolderPool>&& pool, TIntrusivePtr<NInterconnect::TStreamSocket> socket, const NActors::TActorContext &ctx) = 0;
 };
 
-class TInterconnectZcProcessor { //}  : public NActors::TActor<TInterconnectZcProcessor> {
+class TInterconnectZcProcessor {
 public:
     TInterconnectZcProcessor(bool enabled);
     ~TInterconnectZcProcessor() = default;
 
     ssize_t ProcessSend(std::span<TConstIoVec> wbuf, TStreamSocket& socket, std::span<TOutgoingStream::TBufController> ctrl);
-    void ProcessNotification(NInterconnect::TStreamSocket& socket);
+    void ProcessNotification(NInterconnect::TStreamSocket& socket) {
+        if (ZcState == ZC_OK || ZcState == ZC_CONGESTED) {
+            DoProcessNotification(socket);
+        }
+    }
 
     std::unique_ptr<IZcGuard> GetGuard();
 
@@ -41,14 +43,6 @@ private:
 
     TString LastErr;
 
-
-
-    ui32 LastZcConfirmed;
-
-
-
-    void DoProcessErrQueue(NInterconnect::TStreamSocket& socket);
-
     enum {
         ZC_DISABLED,            // ZeroCopy featute is disabled by used
         ZC_DISABLED_ERR,        // We got some errors and unable to use ZC for this connection
@@ -60,6 +54,7 @@ private:
     } ZcState;
 
     bool ZcStateIsOk() { return ZcState == ZC_OK; }
+    void DoProcessNotification(NInterconnect::TStreamSocket& socket);
 };
 
 }
