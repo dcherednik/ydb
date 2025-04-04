@@ -541,7 +541,7 @@ namespace NActors {
             LOG_INFO(*TlsActivationContext, NActorsServices::INTERCONNECT_STATUS, "[%u] disconnected", Proxy->PeerNodeId);
         }
         if (XdcSocket) {
-            // call shutdown but do not call close and do not free wrapper object - we need to finish ZC transfers
+            // call shutdown but do not call close and do not free wrapper object - we need descriptor to finish ZC op
             XdcSocket->Shutdown(SHUT_RDWR);
         }
         UpdateState(EState::Idle);
@@ -763,6 +763,9 @@ namespace NActors {
 
                 if (zeroCtrl) {
                     r = ZcProcessor.ProcessSend(wbuffers, socket, zeroCtrl);
+                    if (r < 0) {
+                        err = ZcProcessor.GetErrReason();
+                    }
                 } else {
                     do {
                         if (wbuffers.size() == 1) {
@@ -1397,6 +1400,12 @@ namespace NActors {
                                 TABLED() { str << "ZeroCopy send with copy / send total"; }
                                 TABLED() {
                                     str << Sprintf("%d / %d", ZcProcessor.GetZcSendWithCopy(), ZcProcessor.GetZcSend());
+                                }
+                            }
+                            TABLER() {
+                                TABLED() { str << "ZeroCopy uncompleted"; }
+                                TABLED() {
+                                    str << ZcProcessor.GetUncompleted());
                                 }
                             }
                         }

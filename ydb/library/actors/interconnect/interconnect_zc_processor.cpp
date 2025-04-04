@@ -67,7 +67,6 @@ static TProcessErrQueueResult DoProcessErrQueue(NInterconnect::TStreamSocket& so
     msg.msg_flags = 0;
 
     constexpr size_t cmsg_alloc_space =
-        CMSG_SPACE(sizeof(scm_timestamping)) +
         CMSG_SPACE(sizeof(sock_extended_err) + sizeof(sockaddr_in)) +
         CMSG_SPACE(32 * NLA_ALIGN(NLA_HDRLEN + sizeof(uint64_t)));
 
@@ -92,8 +91,13 @@ static TProcessErrQueueResult DoProcessErrQueue(NInterconnect::TStreamSocket& so
             break;
         }
 
+        // Unlikly, but grpc handle it
         if ((msg.msg_flags & MSG_CTRUNC) != 0) {
-            return TErr("errqueue message was truncated");
+            if (result.SendNum == 0) {
+                return TErr("errqueue message was truncated");
+            } else {
+                break;
+            }
         }
 
         if (msg.msg_controllen == 0) {
@@ -152,7 +156,6 @@ void TInterconnectZcProcessor::DoProcessNotification(NInterconnect::TStreamSocke
         }}, res);
     
 
-    Cerr << "DoProcessNotification: " << GetCurrentState() << " " << ZcSend << " " << ZcUncompletedSend << " " << ZcSendWithCopy << Endl; 
     if (ZcState == ZC_CONGESTED && ZcSend == ZcUncompletedSend) {
         ZcState = ZC_OK;
     }
@@ -232,6 +235,7 @@ ssize_t TInterconnectZcProcessor::ProcessSend(std::span<TConstIoVec> wbuf, TStre
                     // it looks like misconfiguration (unable to lock page or net.core.optmem_max extremely small)
                     // It is better just to stop trying using ZC
                     ZcState = ZC_DISABLED_ERR;
+                    LastErr += "Got ENOBUF just for first transfer"
                 } else {
                     // Got ENOBUFS after some successful send calls. Probably net.core.optmem_max still is not enought
                     // Just disable temporary ZC until we dequeue notifications
