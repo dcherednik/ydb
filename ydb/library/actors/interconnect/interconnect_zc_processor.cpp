@@ -235,7 +235,7 @@ ssize_t TInterconnectZcProcessor::ProcessSend(std::span<TConstIoVec> wbuf, TStre
                     // it looks like misconfiguration (unable to lock page or net.core.optmem_max extremely small)
                     // It is better just to stop trying using ZC
                     ZcState = ZC_DISABLED_ERR;
-                    LastErr += "Got ENOBUF just for first transfer"
+                    LastErr += "Got ENOBUF just for first transfer";
                 } else {
                     // Got ENOBUFS after some successful send calls. Probably net.core.optmem_max still is not enought
                     // Just disable temporary ZC until we dequeue notifications

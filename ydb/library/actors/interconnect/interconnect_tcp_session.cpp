@@ -1403,9 +1403,9 @@ namespace NActors {
                                 }
                             }
                             TABLER() {
-                                TABLED() { str << "ZeroCopy uncompleted"; }
+                                TABLED() { str << "ZeroCopy lag (transfers)"; }
                                 TABLED() {
-                                    str << ZcProcessor.GetUncompleted());
+                                    str << ZcProcessor.GetZcLag();
                                 }
                             }
                         }

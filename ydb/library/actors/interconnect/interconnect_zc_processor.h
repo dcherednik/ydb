@@ -35,7 +35,7 @@ public:
 
     ui64 GetZcSend() const { return ZcSend; }
     ui64 GetZcSendWithCopy() const { return ZcSendWithCopy; }
-    ui64 GetUncompleted() const { return ZcUncompletedSend; }
+    ui64 GetZcLag() const { return ZcUncompletedSend - ZcSend; }
     TString GetCurrentState() const;
     const TString& GetErrReason() const { return LastErr; }
 
