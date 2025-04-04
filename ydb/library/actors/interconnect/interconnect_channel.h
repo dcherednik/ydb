@@ -108,7 +108,7 @@ namespace NActors {
             return OutputQueueSize;
         }
 
-        void ProcessUndelivered(TEventHolderPool& pool, NInterconnect::IZcGuard& zg);
+        void ProcessUndelivered(TEventHolderPool& pool, NInterconnect::IZcGuard* zg);
 
         const ui32 PeerNodeId;
         const ui16 ChannelId;

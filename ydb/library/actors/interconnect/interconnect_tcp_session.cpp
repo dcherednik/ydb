@@ -102,7 +102,7 @@ namespace NActors {
         std::unique_ptr<NInterconnect::IZcGuard> guard = ZcProcessor.GetGuard();
 
         ChannelScheduler->ForEach([&](TEventOutputChannel& channel) {
-            channel.ProcessUndelivered(*Pool, *guard);
+            channel.ProcessUndelivered(*Pool, guard.get());
         });
 
         if (ReceiverId) {
@@ -252,6 +252,10 @@ namespace NActors {
         SendBufferSize = ev->Get()->Socket->GetSendBufferSize();
         Socket = std::move(ev->Get()->Socket);
         XdcSocket = std::move(ev->Get()->XdcSocket);
+
+        if (XdcSocket) {
+            ZcProcessor.ApplySocketOption(*XdcSocket);
+        }
 
         // there may be a race
         const ui64 nextPacket = Max(LastConfirmed, ev->Get()->NextPacket);
@@ -537,8 +541,8 @@ namespace NActors {
             LOG_INFO(*TlsActivationContext, NActorsServices::INTERCONNECT_STATUS, "[%u] disconnected", Proxy->PeerNodeId);
         }
         if (XdcSocket) {
+            // call shutdown but do not call close and do not free wrapper object - we need to finish ZC transfers
             XdcSocket->Shutdown(SHUT_RDWR);
-            XdcSocket.Reset();
         }
         UpdateState(EState::Idle);
         SendUpdateToWhiteboard(true, false);

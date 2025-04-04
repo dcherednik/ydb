@@ -21,8 +21,11 @@ public:
     TInterconnectZcProcessor(bool enabled);
     ~TInterconnectZcProcessor() = default;
 
+    void ApplySocketOption(TStreamSocket& socket);
+
     ssize_t ProcessSend(std::span<TConstIoVec> wbuf, TStreamSocket& socket, std::span<TOutgoingStream::TBufController> ctrl);
     void ProcessNotification(NInterconnect::TStreamSocket& socket) {
+        Cerr << "DoProcessNotification: " << GetCurrentState() << " " << ZcSend << " " << ZcUncompletedSend << " " << ZcSendWithCopy << Endl; 
         if (ZcState == ZC_OK || ZcState == ZC_CONGESTED) {
             DoProcessNotification(socket);
         }
@@ -55,6 +58,7 @@ private:
 
     bool ZcStateIsOk() { return ZcState == ZC_OK; }
     void DoProcessNotification(NInterconnect::TStreamSocket& socket);
+    void ResetState();
 };
 
 }

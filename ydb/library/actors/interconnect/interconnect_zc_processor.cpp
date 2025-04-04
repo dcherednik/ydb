@@ -152,6 +152,7 @@ void TInterconnectZcProcessor::DoProcessNotification(NInterconnect::TStreamSocke
         }}, res);
     
 
+    Cerr << "DoProcessNotification: " << GetCurrentState() << " " << ZcSend << " " << ZcUncompletedSend << " " << ZcSendWithCopy << Endl; 
     if (ZcState == ZC_CONGESTED && ZcSend == ZcUncompletedSend) {
         ZcState = ZC_OK;
     }
@@ -162,6 +163,32 @@ void TInterconnectZcProcessor::DoProcessNotification(NInterconnect::TStreamSocke
     if (ZcState == ZC_OK && ZcSendWithCopy == ZcSend && ZcSend > 10) {
         ZcState = ZC_DISABLED_HIDEN_COPY;
     }
+}
+
+void TInterconnectZcProcessor::ApplySocketOption(NInterconnect::TStreamSocket& socket)
+{
+#ifdef YDB_MSG_ZEROCOPY_SUPPORTED
+    if (ZcState == ZC_OK) {
+        const int enable = 1;
+        if (setsockopt((int)socket, SOL_SOCKET, SO_ZEROCOPY, &enable, sizeof(enable)) < 0) {
+            LastErr += "Unable to set SO_ZEROCOPY option";
+            ZcState = ZC_DISABLED_ERR;
+        } else {
+            ResetState();
+        }
+    }
+#endif
+}
+
+void TInterconnectZcProcessor::ResetState() {
+    if (ZcState == ZC_DISABLED) {
+        return;
+    }
+
+    ZcState = ZC_OK;
+    ZcSend = 0;
+    ZcUncompletedSend = 0;
+    ZcSendWithCopy = 0;
 }
 
 ssize_t TInterconnectZcProcessor::ProcessSend(std::span<TConstIoVec> wbuf, TStreamSocket& socket,
@@ -215,8 +242,6 @@ ssize_t TInterconnectZcProcessor::ProcessSend(std::span<TConstIoVec> wbuf, TStre
         }
     }
 #endif
-
-    Cerr << "ProcessSend: " << ctrl.size() << Endl;
     return r;
 }
 
@@ -280,6 +305,8 @@ void TGuardActor::Bootstrap() {
 void TGuardActor::DoGc()
 {
     Cerr << "DoGc" << Uncompleted << Endl;
+    Y_DEBUG_ABORT_UNLESS(Pool);
+    Y_DEBUG_ABORT_UNLESS(Socket);
 
     const TProcessErrQueueResult res = DoProcessErrQueue(*Socket);
 

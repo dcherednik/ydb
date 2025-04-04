@@ -338,7 +338,7 @@ namespace NActors {
         return complete;
     }
 
-    void TEventOutputChannel::ProcessUndelivered(TEventHolderPool& pool, NInterconnect::IZcGuard& zg) {
+    void TEventOutputChannel::ProcessUndelivered(TEventHolderPool& pool, NInterconnect::IZcGuard* zg) {
         LOG_DEBUG_IC_SESSION("ICOCH89", "Notyfying about Undelivered messages! NotYetConfirmed size: %zu, Queue size: %zu", NotYetConfirmed.size(), Queue.size());
         if (State == EState::BODY && Queue.front().Event) {
             Y_ABORT_UNLESS(!Chunker.IsComplete()); // chunk must have an event being serialized
@@ -356,7 +356,9 @@ namespace NActors {
 
         // Events in the NotYetConfirmed may be actualy not sended by kernel.
         // In case of enabled ZC we need to wait kernel send task to be completed before reusing buffers
-        zg.ExtractToSafeTermination(NotYetConfirmed);
+        if (zg) {
+            zg->ExtractToSafeTermination(NotYetConfirmed);
+        }
         pool.Release(NotYetConfirmed);
         for (auto& item : Queue) {
             item.ForwardOnNondelivery(false);
