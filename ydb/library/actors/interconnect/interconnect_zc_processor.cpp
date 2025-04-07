@@ -50,12 +50,15 @@ struct TErr {
     TString Reason;
 };
 
+struct TAgain {
+};
+
 struct TZcSendResult {
     ui64 SendNum = 0;
     ui64 SendWithCopyNum = 0;
 };
 
-using TProcessErrQueueResult = std::variant<TErr, TZcSendResult>;
+using TProcessErrQueueResult = std::variant<TErr, TAgain, TZcSendResult>;
 
 static TProcessErrQueueResult DoProcessErrQueue(NInterconnect::TStreamSocket& socket) {
     // Mostly copy-paste from grpc ERRQUEUE handling
@@ -86,9 +89,16 @@ static TProcessErrQueueResult DoProcessErrQueue(NInterconnect::TStreamSocket& so
             r = socket.RecvErrQueue(&msg);
         } while (r == -EINTR);
 
-        if (r == -EAGAIN || r == -EWOULDBLOCK) {
-        //if (r < 0) {
-            break;
+        if (r < 0) {
+            if (result.SendNum == 0) {
+                if (r == -EAGAIN || r == -EWOULDBLOCK) {
+                    return TAgain();
+                } else {
+                    return TErr("unexpected error during errqueue read, err: " + ToString(r));
+                }
+            } else {
+                break;
+            }
         }
 
         // Unlikly, but grpc handle it
@@ -99,12 +109,6 @@ static TProcessErrQueueResult DoProcessErrQueue(NInterconnect::TStreamSocket& so
                 break;
             }
         }
-
-        if (msg.msg_controllen == 0) {
-            // There was no control message found. It was probably spurious.
-            break;
-        }
-
 
         for (auto cmsg = CMSG_FIRSTHDR(&msg); cmsg && cmsg->cmsg_len;
             cmsg = CMSG_NXTHDR(&msg, cmsg)) {
@@ -149,6 +153,9 @@ void TInterconnectZcProcessor::DoProcessNotification(NInterconnect::TStreamSocke
         [this](const TErr& err) {
             ZcState = ZC_DISABLED_ERR;
             LastErr += err.Reason;
+        },
+        [](const TAgain&) {
+            // Noting here. Probably read during next iteration
         },
         [this](const TZcSendResult& res) {
             Confirmed += res.SendNum;
@@ -313,8 +320,15 @@ void TGuardActor::DoGc()
     const TProcessErrQueueResult res = DoProcessErrQueue(*Socket);
 
     std::visit(TOverloaded{
-        [](const TErr& err) {
+        [this](const TErr& err) {
+            // Nothing can do here (( VERIFY, or just drop buffer probably unsafe from network perspective
             Cerr << err.Reason << Endl;
+            Pool->Release(Delayed);
+            Pool->Trim();
+            TActor::PassAway();
+        },
+        [this](const TAgain&) {
+            Schedule(TDuration::MilliSeconds(100), new TEvents::TEvWakeup());
         },
         [this](const TZcSendResult& res) {
             Confirmed += res.SendNum;
