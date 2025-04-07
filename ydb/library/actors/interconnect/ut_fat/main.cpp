@@ -169,3 +169,29 @@ Y_UNIT_TEST_SUITE(InterconnectUnstableConnection) {
         NanoSleep(30ULL * 1000 * 1000 * 1000);
     }
 }
+
+Y_UNIT_TEST_SUITE(InterconnectZcLocalOp) {
+    Y_UNIT_TEST(InterconnectTestZcDisabledAfterHiddenCopy) {
+        ui32 numNodes = 2;
+        ui16 flags = IEventHandle::FlagTrackDelivery | IEventHandle::FlagGenerateUnsureUndelivered;
+
+        TTestICCluster testCluster(numNodes, TChannelsConfig());
+
+        TReceiverActor* receiverActor = new TReceiverActor(testCluster.GetNode(1));
+        const TActorId recipient = testCluster.RegisterActor(receiverActor, 2);
+        TSenderActor* senderActor = new TSenderActor(recipient, flags, true);
+        testCluster.RegisterActor(senderActor, 1);
+
+        NanoSleep(15ULL * 1000 * 1000 * 1000);
+        auto httpResp = testCluster.GetSessionDbg(1, 2);
+        const TString& resp = httpResp.GetValueSync();
+        const TString pattern = "<tr><td>ZeroCopy state</td><td>";
+        auto pos = resp.find(pattern);
+        UNIT_ASSERT_C(pos != std::string::npos, "zero copy field was not found in http info");
+        pos += pattern.size();
+        size_t end = resp.find('<', pos);
+        UNIT_ASSERT(end != std::string::npos);
+        UNIT_ASSERT_VALUES_EQUAL("DisabledHidenCopy", resp.substr(pos, end - pos));
+    }
+
+}

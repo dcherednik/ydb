@@ -25,7 +25,7 @@ public:
 
     ssize_t ProcessSend(std::span<TConstIoVec> wbuf, TStreamSocket& socket, std::span<TOutgoingStream::TBufController> ctrl);
     void ProcessNotification(NInterconnect::TStreamSocket& socket) {
-        Cerr << "DoProcessNotification: " << GetCurrentState() << " " << ZcSend << " " << ZcUncompletedSend << " " << ZcSendWithCopy << Endl; 
+        Cerr << "DoProcessNotification: " << (int)socket << " "  << GetCurrentState() << " " << ZcSend << " " << ZcUncompletedSend << " " << ZcSendWithCopy << Endl; 
         if (ZcState == ZC_OK || ZcState == ZC_CONGESTED) {
             DoProcessNotification(socket);
         }

@@ -5,6 +5,7 @@
 
 #include <ydb/library/actors/interconnect/interconnect_tcp_proxy.h>
 #include <ydb/library/actors/core/events.h>
+#include <ydb/library/actors/core/actor_bootstrapped.h>
 #include <library/cpp/testing/unittest/tests_data.h>
 
 #include <util/generic/noncopyable.h>
@@ -83,5 +84,41 @@ public:
 
     void KillActor(ui32 nodeId, const TActorId& id) {
         Nodes[nodeId]->Send(id, new NActors::TEvents::TEvPoisonPill);
+    }
+
+    NThreading::TFuture<TString> GetSessionDbg(ui32 me, ui32 other) {
+        NThreading::TPromise<TString> promise = NThreading::NewPromise<TString>();
+
+        class TGetHttpInfoActor : public NActors::TActorBootstrapped<TGetHttpInfoActor> {
+        public:
+            TGetHttpInfoActor(const TActorId& id, NThreading::TPromise<TString> promise)
+                : IcProxy(id)
+                , Promise(promise)
+                {}
+
+            void Bootstrap() {
+                NMonitoring::TMonService2HttpRequest monReq(nullptr, nullptr, nullptr, nullptr, "", nullptr);
+                Send(IcProxy, new NMon::TEvHttpInfo(monReq));
+                Become(&TGetHttpInfoActor::StateFunc);
+            }
+
+            STRICT_STFUNC(StateFunc,
+                hFunc(NMon::TEvHttpInfoRes, Handle);
+            )
+        private:
+            void Handle(NMon::TEvHttpInfoRes::TPtr& ev) {
+                TStringStream str;
+                ev->Get()->Output(str);
+                Promise.SetValue(str.Str());
+                PassAway();
+            }
+            const TActorId IcProxy;
+            NThreading::TPromise<TString> Promise;
+        };
+
+        IActor* actor = new TGetHttpInfoActor(Nodes[me]->InterconnectProxy(other), promise); 
+        Nodes[me]->RegisterActor(actor);
+
+        return promise.GetFuture();
     }
 };
