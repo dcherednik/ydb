@@ -25,7 +25,6 @@ public:
 
     ssize_t ProcessSend(std::span<TConstIoVec> wbuf, TStreamSocket& socket, std::span<TOutgoingStream::TBufController> ctrl);
     void ProcessNotification(NInterconnect::TStreamSocket& socket) {
-        Cerr << "DoProcessNotification: " << (int)socket << " "  << GetCurrentState() << " " << ZcSend << " " << ZcUncompletedSend << " " << ZcSendWithCopy << Endl; 
         if (ZcState == ZC_OK || ZcState == ZC_CONGESTED) {
             DoProcessNotification(socket);
         }
@@ -51,7 +50,7 @@ private:
     enum {
         ZC_DISABLED,            // ZeroCopy featute is disabled by used
         ZC_DISABLED_ERR,        // We got some errors and unable to use ZC for this connection
-        ZC_DISABLED_HIDEN_COPY, // The socket associated with loopback, or unsupported nic
+        ZC_DISABLED_HIDDEN_COPY, // The socket associated with loopback, or unsupported nic
                                 // real ZC send is not possible in this case and cause hiden copy inside kernel.
         ZC_OK,                  // OK, data can be send using zero copy
         ZC_CONGESTED,           // We got ENUBUF and temporary disable ZC send

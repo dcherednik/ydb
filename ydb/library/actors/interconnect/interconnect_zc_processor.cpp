@@ -164,7 +164,7 @@ void TInterconnectZcProcessor::DoProcessNotification(NInterconnect::TStreamSocke
     // place on the same host (consider different namespaces is the same host too).
     // So we check that each transfer has hidden copy during some period.
     if (ZcState == ZC_OK && ZcSendWithCopy == ZcSend && ZcSend > 10) {
-        ZcState = ZC_DISABLED_HIDEN_COPY;
+        ZcState = ZC_DISABLED_HIDDEN_COPY;
     }
 }
 
@@ -259,8 +259,8 @@ TString TInterconnectZcProcessor::GetCurrentState() const {
             return "Disabled";
         case ZC_DISABLED_ERR:
             return "DisabledErr";
-        case ZC_DISABLED_HIDEN_COPY:
-            return "DisabledHidenCopy";
+        case ZC_DISABLED_HIDDEN_COPY:
+            return "DisabledHiddenCopy";
         case ZC_OK:
             return "Ok";
         case ZC_CONGESTED:
