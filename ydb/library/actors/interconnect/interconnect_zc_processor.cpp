@@ -151,19 +151,19 @@ void TInterconnectZcProcessor::DoProcessNotification(NInterconnect::TStreamSocke
             LastErr += err.Reason;
         },
         [this](const TZcSendResult& res) {
-            ZcSend += res.SendNum;
-            ZcSendWithCopy += res.SendWithCopyNum;
+            Confirmed += res.SendNum;
+            ConfirmedWithCopy += res.SendWithCopyNum;
         }}, res);
     
 
-    if (ZcState == ZC_CONGESTED && ZcSend == ZcUncompletedSend) {
+    if (ZcState == ZC_CONGESTED && Confirmed == SendAsZc) {
         ZcState = ZC_OK;
     }
 
     // There are no reliable way to check is both side of tcp connection
     // place on the same host (consider different namespaces is the same host too).
     // So we check that each transfer has hidden copy during some period.
-    if (ZcState == ZC_OK && ZcSendWithCopy == ZcSend && ZcSend > 10) {
+    if (ZcState == ZC_OK && ConfirmedWithCopy == Confirmed && Confirmed > 10) {
         ZcState = ZC_DISABLED_HIDDEN_COPY;
     }
 }
@@ -189,9 +189,9 @@ void TInterconnectZcProcessor::ResetState() {
     }
 
     ZcState = ZC_OK;
-    ZcSend = 0;
-    ZcUncompletedSend = 0;
-    ZcSendWithCopy = 0;
+    Confirmed = 0;
+    ConfirmedWithCopy = 0;
+    SendAsZc = 0;
 }
 
 ssize_t TInterconnectZcProcessor::ProcessSend(std::span<TConstIoVec> wbuf, TStreamSocket& socket,
@@ -227,10 +227,10 @@ ssize_t TInterconnectZcProcessor::ProcessSend(std::span<TConstIoVec> wbuf, TStre
     if (flags & MSG_ZEROCOPY) {
         if (r > 0) {
             // Successful enqueued in to the kernel - increment counter to track dequeue progress
-            ZcUncompletedSend++;
-            ctrl.front().Update(ZcUncompletedSend);
+            SendAsZc++;
+            ctrl.front().Update(SendAsZc);
         } else if (r == -ENOBUFS) {
-                if (ZcUncompletedSend == ZcSend) {
+                if (SendAsZc == Confirmed) {
                     // Got ENOBUFS just for first not completed zero copy transfer
                     // it looks like misconfiguration (unable to lock page or net.core.optmem_max extremely small)
                     // It is better just to stop trying using ZC
@@ -267,7 +267,6 @@ TString TInterconnectZcProcessor::GetCurrentState() const {
             return "Congested";
     }
 }
-
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -308,7 +307,6 @@ void TGuardActor::Bootstrap() {
 
 void TGuardActor::DoGc()
 {
-    Cerr << "DoGc" << Uncompleted << Endl;
     Y_DEBUG_ABORT_UNLESS(Pool);
     Y_DEBUG_ABORT_UNLESS(Socket);
 
@@ -364,7 +362,7 @@ private:
 
 std::unique_ptr<IZcGuard> TInterconnectZcProcessor::GetGuard()
 {
-    return std::make_unique<TGuardRunner>(ZcUncompletedSend, ZcSend);
+    return std::make_unique<TGuardRunner>(SendAsZc, Confirmed);
 }
 
 }

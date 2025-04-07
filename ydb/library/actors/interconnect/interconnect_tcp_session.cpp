@@ -1397,13 +1397,13 @@ namespace NActors {
                                 TABLED() { str << ZcProcessor.GetCurrentState(); }
                             }
                             TABLER() {
-                                TABLED() { str << "ZeroCopy send with copy / send total"; }
+                                TABLED() { str << "ZeroCopy confirmed send with copy / confirmed send total"; }
                                 TABLED() {
-                                    str << Sprintf("%d / %d", ZcProcessor.GetZcSendWithCopy(), ZcProcessor.GetZcSend());
+                                    str << Sprintf("%d / %d", ZcProcessor.GetConfirmedWithCopy(), ZcProcessor.GetConfirmed());
                                 }
                             }
                             TABLER() {
-                                TABLED() { str << "ZeroCopy lag (transfers)"; }
+                                TABLED() { str << "ZeroCopy lag (in transfers)"; }
                                 TABLED() {
                                     str << ZcProcessor.GetZcLag();
                                 }

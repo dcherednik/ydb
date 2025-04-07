@@ -3,7 +3,6 @@
 #include "interconnect_common.h"
 
 #include "event_holder_pool.h"
-#include "packet.h"
 
 #include <list>
 
@@ -21,29 +20,36 @@ public:
     TInterconnectZcProcessor(bool enabled);
     ~TInterconnectZcProcessor() = default;
 
+    // Enables ability to use ZC for given socket
     void ApplySocketOption(TStreamSocket& socket);
 
+    // Perform send as ZC if front message is sutiable for ZC transfer.
+    // Othervise send us usial number of messages to leave ZC ready for next call 
     ssize_t ProcessSend(std::span<TConstIoVec> wbuf, TStreamSocket& socket, std::span<TOutgoingStream::TBufController> ctrl);
+
+    // Process notification queue to track actual send position
     void ProcessNotification(NInterconnect::TStreamSocket& socket) {
         if (ZcState == ZC_OK || ZcState == ZC_CONGESTED) {
             DoProcessNotification(socket);
         }
     }
 
+    // Return guerd to start termination handling
     std::unique_ptr<IZcGuard> GetGuard();
 
-    ui64 GetZcSend() const { return ZcSend; }
-    ui64 GetZcSendWithCopy() const { return ZcSendWithCopy; }
-    ui64 GetZcLag() const { return ZcUncompletedSend - ZcSend; }
+    // Mon parts
+    ui64 GetConfirmed() const { return Confirmed; }
+    ui64 GetConfirmedWithCopy() const { return ConfirmedWithCopy; }
+    ui64 GetZcLag() const { return SendAsZc - Confirmed; }
     TString GetCurrentState() const;
     const TString& GetErrReason() const { return LastErr; }
 
+    // Do not try to use ZC for small events
     constexpr static ui32 ZcThreshold = 16384;
-
 private:
-    ui64 ZcUncompletedSend = 0;
-    ui64 ZcSend = 0;
-    ui64 ZcSendWithCopy = 0;
+    ui64 SendAsZc = 0;
+    ui64 Confirmed = 0;
+    ui64 ConfirmedWithCopy = 0;
 
     TString LastErr;
 
