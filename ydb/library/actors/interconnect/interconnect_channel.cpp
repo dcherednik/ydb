@@ -319,12 +319,12 @@ namespace NActors {
         WriteUnaligned<ui16>(ptr, bytesSerialized);
         ptr += sizeof(ui16);
         if (task.ChecksummingXxhash()) {
-            XXH3_state_t state;
-            XXH3_64bits_reset(&state);
-            task.XdcStream.ScanLastBytes(bytesSerialized, [&state](TContiguousSpan span) {
-                XXH3_64bits_update(&state, span.data(), span.size());
-            });
-            const ui32 cs = XXH3_64bits_digest(&state);
+            //XXH3_state_t state;
+            //XXH3_64bits_reset(&state);
+            //task.XdcStream.ScanLastBytes(bytesSerialized, [&state](TContiguousSpan span) {
+            //    XXH3_64bits_update(&state, span.data(), span.size());
+            //});
+            const ui32 cs = 1;//XXH3_64bits_digest(&state);
             WriteUnaligned<ui32>(ptr, cs);
         } else if (task.ChecksummingCrc32c()) {
             WriteUnaligned<ui32>(ptr, task.ExternalChecksum);

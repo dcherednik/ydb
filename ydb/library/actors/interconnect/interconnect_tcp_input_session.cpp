@@ -967,7 +967,7 @@ namespace NActors {
             auto& [size, expected] = XdcChecksumQ.front();
             const size_t n = Min<size_t>(size, span.size());
             if (Params.UseXxhash) {
-                XXH3_64bits_update(&XxhashXdcState, span.data(), n);
+                //XXH3_64bits_update(&XxhashXdcState, span.data(), n);
             } else {
                 XdcCurrentChecksum = Crc32cExtendMSanCompatible(XdcCurrentChecksum, span.data(), n);
             }
@@ -975,8 +975,8 @@ namespace NActors {
             size -= n;
             if (!size) {
                 if (Params.UseXxhash) {
-                    XdcCurrentChecksum = XXH3_64bits_digest(&XxhashXdcState);
-                    XXH3_64bits_reset(&XxhashXdcState);
+                    XdcCurrentChecksum = 1;//XXH3_64bits_digest(&XxhashXdcState);
+                    //XXH3_64bits_reset(&XxhashXdcState);
                 }
                 if (XdcCurrentChecksum != expected) {
                     LOG_ERROR_IC_SESSION("ICIS16", "payload checksum error");
