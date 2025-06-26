@@ -167,4 +167,61 @@ Y_UNIT_TEST_SUITE(Allocator) {
         UNIT_ASSERT_C(!regions[2].Empty(), "invalid region");
         UNIT_ASSERT_VALUES_EQUAL_C(regions[2].GetSize(), 2 * BUF_SIZE, "invalid size");
     }
+
+    Y_UNIT_TEST(FullChunkAllocationSingleThread) {
+        std::shared_ptr<NInterconnect::NRdma::IMemPool> memPool = NInterconnect::NRdma::CreateIncrementalMemPool();
+        size_t sz = memPool->GetMaxAllocSz();
+        void* addr = nullptr;
+        {
+            NInterconnect::NRdma::TMemRegionPtr region = memPool->Alloc(sz);
+            UNIT_ASSERT(region);
+            addr = region->GetAddr();
+            UNIT_ASSERT(addr); 
+            UNIT_ASSERT_VALUES_EQUAL(sz, region->GetSize());
+        }
+        std::vector<void*> dummy;
+        for (size_t i = 4096; i <= sz; i <<= 1) {
+            dummy.push_back(std::aligned_alloc(4096, i));
+        }
+        {
+            NInterconnect::NRdma::TMemRegionPtr region = memPool->Alloc(sz);
+            UNIT_ASSERT(region);
+            UNIT_ASSERT(addr == region->GetAddr()); 
+            UNIT_ASSERT_VALUES_EQUAL(sz, region->GetSize());
+        }
+        for (auto& m : dummy) {
+            std::free(m);
+        }
+    }
+
+    Y_UNIT_TEST(FullChunkAllocationMultiThread) {
+        const ui32 NUM_THREADS = 8;
+        //const ui32 NUM_ALLOC = 4000000000;
+        const ui32 NUM_ALLOC = 40000000;
+        std::vector<std::thread> threads;
+        std::vector<ui64> times(NUM_THREADS);
+
+        auto memPool = NInterconnect::NRdma::CreateIncrementalMemPool();
+        size_t sz = memPool->GetMaxAllocSz();
+
+        for (ui32 i = 0; i < NUM_THREADS; ++i) {
+            threads.emplace_back([memPool, &t=times[i], sz]() {
+                auto now = TInstant::Now();
+                for (ui32 j = 0; j < NUM_ALLOC; ++j) {
+                    auto memRegion = memPool->Alloc(sz);
+                    UNIT_ASSERT_C(memRegion->GetAddr(), "invalid address");
+                }
+                t = (TInstant::Now() - now).MicroSeconds();
+            });
+        }
+        for (auto& t : threads) {
+            t.join();
+        }
+
+        double s = 0;
+        for (const auto& t : times) {
+            s += t / 1000.0 / NUM_ALLOC;
+        }
+        Cerr << "Average time per allocation: " << s / NUM_THREADS << " ms" << Endl;
+    }
 }
