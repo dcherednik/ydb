@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <mutex>
+#include <thread>
 
 namespace NInterconnect::NRdma {
 
@@ -27,6 +28,9 @@ namespace NInterconnect::NRdma {
     }
 
     ~TChunk() {
+        if (auto memPool = MemPool.lock()) {
+            memPool->NotifyDealocated();
+        }
         if (Empty()) {
             return;
         }
@@ -34,7 +38,7 @@ namespace NInterconnect::NRdma {
         for (auto& m: MRs) {
             ibv_dereg_mr(m);
         }
-        Cerr << "~TChunk: " << addr << Endl;
+        //Cerr << "~TChunk: " << addr << Endl;
         std::free(addr);
         MRs.clear();
     }
@@ -194,38 +198,59 @@ namespace NInterconnect::NRdma {
 
     class TMemPoolBase: public IMemPool, public std::enable_shared_from_this<TMemPoolBase> {
     public:
-        TMemPoolBase()
+        TMemPoolBase(size_t maxChunk)
             : Ctxs(NInterconnect::NRdma::NLinkMgr::GetAllCtxs())
+            , MaxChunk(maxChunk)
             , Alignment(NSystemInfo::GetPageSize())
         {
         }
     protected:
         template<typename TAuxData>
         TChunkPtr AllocNewChunk(size_t size) noexcept {
+            const std::lock_guard<std::mutex> lock(Mutex);
+            Y_ABORT_UNLESS(AllocatedChunks <= MaxChunk);
+            if (AllocatedChunks == MaxChunk) {
+                return nullptr;
+            }
+
             size += sizeof(TAuxData);
             size = AlignUp(size, Alignment);
+
             void* ptr = allocateMemory(size, Alignment);
             if (!ptr) {
                 return nullptr;
             }
-            Cerr << "allocated: " << ptr << Endl;
+
+            //Cerr << "allocated: " << ptr << " " << AllocatedChunks << " " << MaxChunk << Endl;
             void* auxPtr = new((char*)ptr + (size - sizeof(TAuxData))) TAuxData;
             auto mrs = registerMemory(ptr, size, Ctxs);
             if (mrs.empty()) {
-                Cerr << "Unable to register" << Endl;
-                Y_ABORT_UNLESS(false, "UNABLE To REGISTER");
+                Y_ABORT_UNLESS(false, "UNABLE TO REGISTER");
                 return nullptr;
             }
+
+            AllocatedChunks++;
+
             return MakeIntrusive<TChunk>(std::move(mrs), shared_from_this(), auxPtr);
         }
 
+        void NotifyDealocated() noexcept {
+            const std::lock_guard<std::mutex> lock(Mutex);
+            AllocatedChunks--;
+        }
+
         const NInterconnect::NRdma::NLinkMgr::TCtxsMap Ctxs;
+        const size_t MaxChunk;
         size_t Alignment;
+        size_t AllocatedChunks = 0;
+        std::mutex Mutex;
     };
 
     class TDummyMemPool: public TMemPoolBase {
     public:
-        using TMemPoolBase::TMemPoolBase;
+        TDummyMemPool()
+            : TMemPoolBase(-1)
+        {}
 
         TMemRegion* AllocImpl(int size) noexcept override {
             struct TDummy {};
@@ -245,7 +270,9 @@ namespace NInterconnect::NRdma {
 
     class TIncrementalMemPool: public TMemPoolBase {
     public:
-        TIncrementalMemPool() {
+        TIncrementalMemPool()
+            : TMemPoolBase(MaxChunks)
+        {
             for (auto& x : ActiveAndFree) {
                 x.store(nullptr);
             }
@@ -261,6 +288,9 @@ namespace NInterconnect::NRdma {
             bool IsInactive() const noexcept {
                 return InactivePos.load(std::memory_order_acquire) >= 0;
             }
+            //static TChunk* MarkActive(TChunk* chunk) {
+            //    return reinterpret_cast<TChunk*>(reinterpret_cast<ui64>(chunk) | (((1ul << 15) - 1) << 48));
+            //}
         };
 
         TMemRegion* AllocImpl(int size) noexcept override {
@@ -268,14 +298,22 @@ namespace NInterconnect::NRdma {
                 return nullptr;
 
             size_t startPos = GetStartPos();
-            size_t attempt = 7;
+            constexpr size_t maxAttempts = 7;
+            size_t attempt = maxAttempts;
             TChunkPtr chunk;
-            while (attempt--) {
+            do {
                 TChunk* cur = PopChunk(startPos, ActiveAndFree);
                 if (!cur) {
-                    // No chunks at all
-                    break;
+                    if (attempt == maxAttempts) {
+                        // May be all chunks are inactive 
+                        ReclaimInactive();
+                        continue;
+                    } else {
+                        // No chunks - try to alloc new one
+                        break;
+                    }
                 }
+
                 TAuxChunkData* aux = CastToAuxChunkData(cur);
 
                 //Cerr << "aux:" << aux->InactivePos.load() << " " << (void*)cur << Endl;
@@ -283,15 +321,18 @@ namespace NInterconnect::NRdma {
                 if (aux->Allocated.load() + (size_t)size > ChunkSize) {
                     Y_ABORT_UNLESS(!aux->IsInactive());
                     // No more space - put chunk in to inactive to be freed
-                    int pos = PushChunk(startPos, Inactive, cur);
-                    //Cerr << "No space: " <<  aux->Allocated.load() << "+ " <<  (size_t)size << " " << ChunkSize << " " << (void*)cur << " pos: " << pos << Endl;
-                    if (pos >= 0) {
-                        aux->InactivePos.store(pos);
-                    } else {
-                        cur->UnRef();
-                    }
+                    int pos = -1;
+                    do {
+                        pos = PushChunk(startPos, Inactive, cur);
+                        if (pos == -1) {
+                            ReclaimInactive();
+                        }
+                    } while (pos == -1);
+                    //Cerr << "No space: " <<  aux->Allocated.load() << "+ " <<  (size_t)size << " " << ChunkSize << " " << (void*)cur << " pos: " << pos << "attempt: " << attempt << Endl;
+                    aux->InactivePos.store(pos);
             
-                    ReclaimInactive(0);
+              //  if (attempt < 2)
+                //        ReclaimInactive();
                 } else {
                     //Cerr << "success: " << aux->Allocated.load() << " " << (void*)cur << Endl; 
                     Y_ABORT_UNLESS(!aux->IsInactive());
@@ -299,7 +340,7 @@ namespace NInterconnect::NRdma {
                     Y_ABORT_UNLESS(!CastToAuxChunkData(chunk.Get())->IsInactive());
                     break;
                 }
-            }
+            } while (attempt--);
             if (chunk) {
                 Y_ABORT_UNLESS(!CastToAuxChunkData(chunk.Get())->IsInactive());
             }
@@ -316,14 +357,13 @@ namespace NInterconnect::NRdma {
             }
 
             Y_ABORT_UNLESS(!CastToAuxChunkData(chunk.Get())->IsInactive());
-            CastToAuxChunkData(chunk.Get())->Allocated.fetch_add(size);
+            size_t offset = CastToAuxChunkData(chunk.Get())->Allocated.fetch_add(size);
             Y_ABORT_UNLESS(!CastToAuxChunkData(chunk.Get())->IsInactive());
 
-            int ret = PushChunk(startPos, ActiveAndFree, chunk.Get());
-            if (ret == -1) {
-                chunk->UnRef();
+            while (PushChunk(startPos, ActiveAndFree, chunk.Get()) == -1) {
+                std::this_thread::yield();
             }
-            return new TMemRegion(chunk , 0, size);
+            return new TMemRegion(chunk , offset, size);
         }
 
         void Free(TMemRegion&&, TChunk& chunk) noexcept override {
@@ -331,13 +371,15 @@ namespace NInterconnect::NRdma {
             TAuxChunkData* auxData = CastToAuxChunkData(&chunk);
             if (auxData->IsInactive() && chunk.RefCount() == (1 + 1)) { // last MemRegion for chunk: 1 ref from TMemRegion and 1 is "manual" during allocation 
                 Y_ABORT_UNLESS(auxData->InactivePos < (int)Inactive.size());
-                Cerr << chunk.RefCount() << " " <<  auxData->InactivePos.load() << (void*)Inactive[auxData->InactivePos].load() << " " << (void*)&chunk<< Endl;
+                //Cerr << chunk.RefCount() << " " <<  auxData->InactivePos.load() << (void*)Inactive[auxData->InactivePos].load() << " " << (void*)&chunk<< Endl;
                 Y_ABORT_UNLESS(Inactive[auxData->InactivePos].load() == &chunk);
                 Inactive[auxData->InactivePos].store(nullptr);
                 auxData->Allocated.store(0);
                 auxData->InactivePos.store(-1);
                 int ret = PushChunk(0, ActiveAndFree, &chunk);
-                Cerr << "PushChunk: " << ret << Endl;
+                //Cerr << "PushChunk: " << ret << Endl;
+
+                //Y_ABORT_UNLESS(ret >= 0);
                 if (ret == -1) {
                     chunk.UnRef();
                 }
@@ -350,35 +392,38 @@ namespace NInterconnect::NRdma {
 
     private:
         static constexpr size_t ChunkSize = 16 << 20;
-        static constexpr size_t MaxChunks = 1 << 4; //must be power of two
+        static constexpr size_t MaxChunks = 1 << 5; //must be power of two
         static constexpr size_t CacheLineSz = 64;
-        static constexpr size_t ChunkGap = CacheLineSz / sizeof(TChunk*); 
+        static constexpr size_t ChunkGap = CacheLineSz / sizeof(TChunk*); // Distance between elemets to prevent cache line sharing
+        static_assert(MaxChunks % ChunkGap == 0);
 
         using TChunkContainer = std::array<std::atomic<TChunk*>, MaxChunks>; 
 
         static size_t WrapPos(size_t x) noexcept {
-            return x % MaxChunks;
+            return (x % MaxChunks + x / MaxChunks) % MaxChunks;
         }
 
         static size_t GetStartPos() noexcept {
             size_t id = syscall(SYS_gettid);
             return (id + ChunkGap) % MaxChunks;
-
         }
 
         static TAuxChunkData* CastToAuxChunkData(TChunk* chunk) noexcept {
             return reinterpret_cast<TAuxChunkData*>(chunk->GetAuxData());
         }
 
-        static TChunk* PopChunk(size_t startPos, TChunkContainer& cont) noexcept {
-            for (size_t i = 0, j = startPos; i < MaxChunks; i++, j++) {
+        [[clang::noinline]] static TChunk* PopChunk(size_t startPos, TChunkContainer& cont) noexcept {
+#if defined(__clang__)
+            #pragma nounroll
+#endif
+            for (size_t i = 0, j = startPos; i < MaxChunks; i++, j += ChunkGap) {
                 size_t pos = WrapPos(j);
                 TChunk* p = cont[pos].exchange(nullptr, std::memory_order_seq_cst);
                 if (p) {
                     return p;
                 }
 
-/*                
+               /*
                 TChunk* p = cont[pos].load(std::memory_order_relaxed);
                 if (p == nullptr) {
                     continue;
@@ -386,13 +431,16 @@ namespace NInterconnect::NRdma {
                 if (cont[pos].compare_exchange_strong(p, nullptr, std::memory_order_seq_cst)) {
                     return p;
                 }
-                    */
+                */
             }
             return nullptr;
         }
 
-        static int PushChunk(size_t startPos, TChunkContainer& cont, TChunk* chunk) noexcept {
-            for (size_t i = 0, j = startPos; i < MaxChunks; i++, j++) {
+        [[clang::noinline]] static int PushChunk(size_t startPos, TChunkContainer& cont, TChunk* chunk) noexcept {
+#if defined(__clang__)
+            #pragma nounroll
+#endif
+            for (size_t i = 0, j = startPos; i < MaxChunks; i++, j += ChunkGap) {
                 size_t pos = WrapPos(j);
                 TChunk* p = cont[pos].load(std::memory_order_relaxed);
                 if (p != nullptr) {
@@ -405,46 +453,43 @@ namespace NInterconnect::NRdma {
             return -1;
         }
 
-        void ReclaimInactive(size_t startPos) noexcept {
-            if (!Mutex.try_lock()) {
+        void ReclaimInactive() noexcept {
+            if (!ReclaimMutex.try_lock()) {
                 return;
             }
-            for (size_t i = 0, j = startPos; i < MaxChunks; i++, j++) {
-                size_t pos = WrapPos(j);
-                TChunk* p = Inactive[pos].load(std::memory_order_seq_cst);
+#if defined(__clang__)
+            #pragma nounroll
+#endif
+            for (size_t i = 0; i < MaxChunks; i++) {
+                TChunk* p = Inactive[i].load(std::memory_order_seq_cst);
                 if (p == nullptr || !CastToAuxChunkData(p)->IsInactive()) {
                     continue;
                 }
                 if (p->RefCount() == 1) {
-                    if (Inactive[pos].compare_exchange_strong(p, nullptr, std::memory_order_seq_cst)) {
-                        if (!CastToAuxChunkData(p)->IsInactive()) {
-                            //if (PushChunk(0, Inactive, p) == -1) {
-                            //    Y_ABORT_UNLESS(expr, ...)
-                           // }
-                            continue;
-                        }
+                    if (Inactive[i].compare_exchange_strong(p, nullptr, std::memory_order_seq_cst)) {
+                        Y_ABORT_UNLESS(CastToAuxChunkData(p)->IsInactive());
+                        //if (!CastToAuxChunkData(p)->IsInactive()) {
+                        //    //if (PushChunk(0, Inactive, p) == -1) {
+                        //    //    Y_ABORT_UNLESS(expr, ...)
+                        //   // }
+                        //    continue;
+                        //}
                         auto aux = CastToAuxChunkData(p);
                         aux->Allocated.store(0);
                         aux->InactivePos.store(-1);
-
                         
-                        auto pos = PushChunk(startPos, ActiveAndFree, p);
-                        if (pos == -1) {
-                            Cerr << "unable to reclaim" << Endl;
-                            p->UnRef();
-                        } else {
-                            //Cerr << "Reclaim success: " << pos << " " << (void*)p<< Endl;
+                        while (PushChunk(0, ActiveAndFree, p) == -1) {
+                            std::this_thread::yield();
                         }
-                        //return;
                     }
                 }
             }
-            Mutex.unlock();
+            ReclaimMutex.unlock();
         }
         
-        TChunkContainer ActiveAndFree;
-        TChunkContainer Inactive; 
-        std::mutex Mutex;
+        alignas(64) TChunkContainer ActiveAndFree;
+        alignas(64) TChunkContainer Inactive; 
+        std::mutex ReclaimMutex;
     };
 
     std::shared_ptr<IMemPool> CreateDummyMemPool() noexcept {
