@@ -15,12 +15,6 @@ namespace NRdmaTest {
 using namespace NActors;
 using namespace NInterconnect::NRdma;
 
-const char* RdmaTestEnvSwitchName = "TEST_ICRDMA";
-
-bool IsRdmaTestDisabled() {
-    return GetEnv(RdmaTestEnvSwitchName).empty();
-}
-
 ICq::TPtr GetCqHandle(NActors::TTestActorRuntimeBase* actorSystem, TRdmaCtx* ctx, TActorId cqActorId) {
     const TActorId edge = actorSystem->AllocateEdgeActor(0);
     auto ev = std::make_unique<TEvGetCqHandle>(ctx);

@@ -82,6 +82,7 @@ ICq::TPtr CreateSimpleCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, int max
 // https://www.rdmamojo.com/2012/12/21/ibv_create_qp/
 class TQueuePair: public NNonCopyable::TMoveOnly {
 public:
+    using TPtr = std::shared_ptr<TQueuePair>;
     struct TQpS {
         int State;
     };
@@ -124,5 +125,6 @@ private:
 };
 
 std::unique_ptr<IIbVerbsBuilder> CreateIbVerbsBuilder(size_t hint) noexcept;
+
 
 }

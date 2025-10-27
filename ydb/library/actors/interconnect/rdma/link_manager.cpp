@@ -3,6 +3,8 @@
 #include "ctx_impl.h"
 #include <mutex>
 
+#include <ydb/library/actors/interconnect/address/interconnect_address.h>
+
 #include <util/generic/scope.h>
 #include <util/generic/string.h>
 #include <util/stream/output.h>
@@ -172,4 +174,13 @@ void Init() {
     RdmaLinkManager.ScanDevices();
 }
 
+TRdmaCtx* GetCtx(const NInterconnect::TAddress& addr) {
+#if not defined(_win32_)
+    return GetCtx(GetV6CompatAddr(addr));
+#else
+    return nullptr;
+#endif
+
 } 
+
+}
