@@ -1430,7 +1430,7 @@ namespace NActors {
         }
 
         void TryRdmaQpExchange(const NActorsInterconnect::TRdmaHandshake& proto, NActorsInterconnect::THandshakeSuccess& success) {
-            auto mtuIndex = Rdma.Qp->GetMinMtuIndex(proto.GetMtuIndex());
+            ui32 mtuIndex = Rdma.Qp->GetMinMtuIndex(proto.GetMtuIndex());
             NInterconnect::NRdma::THandshakeData hd {
                 .QpNum = proto.GetQpNum(),
                 .SubnetPrefix = proto.GetSubnetPrefix(),
@@ -1452,7 +1452,7 @@ namespace NActors {
             const auto& localGid = Rdma.Qp->GetCtx()->GetGid();
             rdmaHsResp->SetSubnetPrefix(localGid.global.subnet_prefix);
             rdmaHsResp->SetInterfaceId(localGid.global.interface_id);
-            rdmaHsResp->SetMtuIndex((ibv_mtu)mtuIndex);
+            rdmaHsResp->SetMtuIndex(mtuIndex);
         }
 
         NActorsInterconnect::TRdmaHandshakeReadAck TryRdmaRead(const NActorsInterconnect::TRdmaCred& cred) {
