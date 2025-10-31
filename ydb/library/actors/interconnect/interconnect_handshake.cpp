@@ -935,10 +935,13 @@ namespace NActors {
                     const auto& remoteQpPrepared = success.GetQpPrepared();
                     LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_TRACE,
                         "peer has prepared qp: %d", remoteQpPrepared.GetQpNum());
-                    ibv_gid gid;
-                    gid.global.interface_id = remoteQpPrepared.GetInterfaceId();
-                    gid.global.subnet_prefix = remoteQpPrepared.GetSubnetPrefix();
-                    int err = Rdma.Qp->ToRtsState(remoteQpPrepared.GetQpNum(), gid, (ibv_mtu)remoteQpPrepared.GetMtuIndex());
+                    NInterconnect::NRdma::THandshakeData hd {
+                        .QpNum = remoteQpPrepared.GetQpNum(),
+                        .SubnetPrefix = remoteQpPrepared.GetSubnetPrefix(),
+                        .InterfaceId = remoteQpPrepared.GetInterfaceId(),
+                        .MtuIndex = remoteQpPrepared.GetMtuIndex(),
+                    };
+                    int err = Rdma.Qp->ToRtsState(hd);
                     if (err) {
                         TStringBuilder sb;
                         sb << gid;
@@ -1427,11 +1430,14 @@ namespace NActors {
         }
 
         void TryRdmaQpExchange(const NActorsInterconnect::TRdmaHandshake& proto, NActorsInterconnect::THandshakeSuccess& success) {
-            ibv_gid gid;
-            gid.global.interface_id = proto.GetInterfaceId();
-            gid.global.subnet_prefix = proto.GetSubnetPrefix();
-            auto mtuIndex = std::min((ui32)proto.GetMtuIndex(), (ui32)Rdma.Qp->GetCtx()->GetPortAttr().active_mtu);
-            int err = Rdma.Qp->ToRtsState(proto.GetQpNum(), gid, (ibv_mtu)mtuIndex);
+            auto mtuIndex = Rdma.Qp->GetMinMtuIndex(proto.GetMtuIndex());
+            NInterconnect::NRdma::THandshakeData hd {
+                .QpNum = proto.GetQpNum(),
+                .SubnetPrefix = proto.GetSubnetPrefix(),
+                .InterfaceId = proto.GetInterfaceId(),
+                .MtuIndex = mtuIndex,
+            };
+            int err = Rdma.Qp->ToRtsState(hd);
             if (err) {
                 TStringBuilder sb;
                 sb << gid;

@@ -104,13 +104,14 @@ public:
     int ToResetState() noexcept;
     // IBV_QPS_RTS - Ready To Send state
     // https://www.rdmamojo.com/2013/01/12/ibv_modify_qp/
-    int ToRtsState(ui32 qpNum, const ibv_gid& gid, int mtuIndex) noexcept;
+    int ToRtsState(const THandshakeData& hd) noexcept;
     int PostSend(struct ::ibv_send_wr *wr, struct ::ibv_send_wr **bad_wr) noexcept;
     ui32 GetQpNum() const noexcept;
     THandshakeData GetHandshakeData() const noexcept;
     void Output(IOutputStream&) const noexcept;
     TQpState GetState(bool forseUpdate) const noexcept;
     TRdmaCtx* GetCtx() const noexcept;
+    int GetMinMtuIndex(int mtuIndex) const noexcept;
 
 private:
     static const int UnknownQpState;
