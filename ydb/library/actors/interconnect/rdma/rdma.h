@@ -78,6 +78,13 @@ private:
 
 ICq::TPtr CreateSimpleCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, int maxCqe, int maxWr, NMonitoring::TDynamicCounters* counter) noexcept;
 
+struct THandshakeData {
+    ui32 QpNum;
+    ui64 SubnetPrefix;
+    ui64 InterfaceId;
+    int MtuIndex;
+};
+
 // Wrapper for ibv Queue Pair
 // https://www.rdmamojo.com/2012/12/21/ibv_create_qp/
 class TQueuePair: public NNonCopyable::TMoveOnly {
@@ -100,6 +107,7 @@ public:
     int ToRtsState(ui32 qpNum, const ibv_gid& gid, int mtuIndex) noexcept;
     int PostSend(struct ::ibv_send_wr *wr, struct ::ibv_send_wr **bad_wr) noexcept;
     ui32 GetQpNum() const noexcept;
+    THandshakeData GetHandshakeData() const noexcept;
     void Output(IOutputStream&) const noexcept;
     TQpState GetState(bool forseUpdate) const noexcept;
     TRdmaCtx* GetCtx() const noexcept;

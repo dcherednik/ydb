@@ -861,11 +861,11 @@ namespace NActors {
 
                 if (Rdma) {
                     auto rdmaHs = request.MutableRdmaHandshake();
-                    rdmaHs->SetQpNum(Rdma.Qp->GetQpNum());
-                    const auto& gid = Rdma.Qp->GetCtx()->GetGid();
-                    rdmaHs->SetSubnetPrefix(gid.global.subnet_prefix);
-                    rdmaHs->SetInterfaceId(gid.global.interface_id);
-                    rdmaHs->SetMtuIndex(Rdma.Qp->GetCtx()->GetPortAttr().active_mtu);
+                    NInterconnect::NRdma::THandshakeData hd = Rdma.Qp->GetHandshakeData();
+                    rdmaHs->SetQpNum(hd.QpNum);
+                    rdmaHs->SetSubnetPrefix(hd.SubnetPrefix);
+                    rdmaHs->SetInterfaceId(hd.InterfaceId);
+                    rdmaHs->SetMtuIndex(hd.MtuIndex);
                     rdmaHs->SetRdmaChecksum(Common->Settings.RdmaChecksum);
                     if (auto region = SetupRdmaHandshakeRegion(*rdmaHs)) {
                         Rdma.HandShakeMemRegion = std::move(region);

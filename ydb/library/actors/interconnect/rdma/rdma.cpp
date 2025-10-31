@@ -204,6 +204,15 @@ TRdmaCtx* TQueuePair::GetCtx() const noexcept {
     return Ctx;
 }
 
+THandshakeData TQueuePair::GetHandshakeData() const noexcept {
+    return THandshakeData {
+        .QpNum = GetQpNum(),
+        .SubnetPrefix = Ctx->GetGid().global.subnet_prefix,
+        .InterfaceId = Ctx->GetGid().global.interface_id,
+        .MtuIndex = Ctx->GetPortAttr().active_mtu
+    };
+}
+
 void TIbVerbsBuilderImpl::AddReadVerb(void* mrAddr, ui32 mrlKey, void* dstAddr, ui32 dstRkey, ui32 dstSize,
     std::function<void(NActors::TActorSystem* as, TEvRdmaIoDone*)> ioCb) noexcept
 {
