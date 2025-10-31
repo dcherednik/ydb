@@ -82,7 +82,7 @@ struct THandshakeData {
     ui32 QpNum;
     ui64 SubnetPrefix;
     ui64 InterfaceId;
-    int MtuIndex;
+    ui32 MtuIndex;
 };
 
 // Wrapper for ibv Queue Pair
@@ -111,7 +111,7 @@ public:
     void Output(IOutputStream&) const noexcept;
     TQpState GetState(bool forseUpdate) const noexcept;
     TRdmaCtx* GetCtx() const noexcept;
-    int GetMinMtuIndex(int mtuIndex) const noexcept;
+    ui32 GetMinMtuIndex(ui32 mtuIndex) const noexcept;
 
 private:
     static const int UnknownQpState;

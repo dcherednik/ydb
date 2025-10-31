@@ -205,8 +205,8 @@ TRdmaCtx* TQueuePair::GetCtx() const noexcept {
     return Ctx;
 }
 
-int TQueuePair::GetMinMtuIndex(int mtuIndex) const noexcept {
-    return std::min((ui32)mtuIndex, (ui32)Ctx->GetPortAttr().active_mtu);
+ui32 TQueuePair::GetMinMtuIndex(ui32 mtuIndex) const noexcept {
+    return std::min(mtuIndex, (ui32)Ctx->GetPortAttr().active_mtu);
 }
 
 THandshakeData TQueuePair::GetHandshakeData() const noexcept {
@@ -338,5 +338,18 @@ void Out<std::shared_ptr<NInterconnect::NRdma::TQueuePair>>(IOutputStream& os, c
 
 IOutputStream& operator<<(IOutputStream& os, const std::shared_ptr<NInterconnect::NRdma::TQueuePair>& qp) {
     Out<std::shared_ptr<NInterconnect::NRdma::TQueuePair>>(os, qp);
+    return os;
+}
+
+template<>
+void Out<NInterconnect::NRdma::THandshakeData>(IOutputStream& os, const NInterconnect::NRdma::THandshakeData& hd) {
+    ibv_gid gid;
+    gid.global.subnet_prefix = hd.SubnetPrefix;
+    gid.global.interface_id = hd.InterfaceId; 
+    os << "[" << hd.QpNum << ", " << gid << ", " << hd.MtuIndex << "]";
+}
+
+IOutputStream& operator<<(IOutputStream& os, const NInterconnect::NRdma::THandshakeData& hd) {
+    Out<NInterconnect::NRdma::THandshakeData>(os, hd);
     return os;
 }

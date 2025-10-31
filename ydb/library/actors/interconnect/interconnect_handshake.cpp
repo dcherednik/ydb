@@ -944,9 +944,9 @@ namespace NActors {
                     int err = Rdma.Qp->ToRtsState(hd);
                     if (err) {
                         TStringBuilder sb;
-                        sb << gid;
+                        sb << hd;
                         LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_ERROR,
-                                "Unable to promote QP to RTS, err: %d (%s), gid: %s", err, strerror(err), sb.data());
+                                "Unable to promote QP to RTS, err: %d (%s), handshake data: %s", err, strerror(err), sb.data());
                         Rdma.HandShakeMemRegion.Reset();
                         Rdma.Clear();
                     }
@@ -1440,10 +1440,10 @@ namespace NActors {
             int err = Rdma.Qp->ToRtsState(hd);
             if (err) {
                 TStringBuilder sb;
-                sb << gid;
+                sb << hd;
                 success.SetRdmaErr("Unable to promote QP to RTS on the incomming side");
                 LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_ERROR,
-                    "Unable to promote QP to RTS, err: %d (%s), gid: %s", err, strerror(err), sb.data());
+                    "Unable to promote QP to RTS, err: %d (%s), handshake data: %s", err, strerror(err), sb.data());
                 Rdma.Clear();
                 return;
             }
