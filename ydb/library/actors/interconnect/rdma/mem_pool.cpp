@@ -286,19 +286,19 @@ namespace NInterconnect::NRdma {
     }
 
     TMemRegionPtr IMemPool::Alloc(int size, ui32 flags) noexcept {
-        TMemRegion* region = AllocImpl(size, flags);
+        TMemRegionPtr region = AllocImpl(size, flags);
         if (!region) {
             return nullptr;
         }
-        return TMemRegionPtr(region);
+        return region;
     }
 
     std::optional<TRcBuf> IMemPool::AllocRcBuf(int size, ui32 flags) noexcept {
-        TMemRegion* region = AllocImpl(size, flags);
+        TIntrusivePtr<TMemRegion>  region = AllocImpl(size, flags);
         if (!region) {
             return {};
         }
-        return TRcBuf(IContiguousChunk::TPtr(region));
+        return TRcBuf(region);
     }
 
     static NMonitoring::TDynamicCounterPtr MakeCounters(TDynamicCounters* counters) {
@@ -420,7 +420,7 @@ namespace NInterconnect::NRdma {
             : TMemPoolBase(-1, MakeCounters(nullptr))
         {}
 
-        TMemRegion* AllocImpl(int size, ui32) noexcept override {
+        TMemRegionPtr AllocImpl(int size, ui32) noexcept override {
             auto chunk = AllocNewChunk(size, false);
             if (!chunk) {
                 return nullptr;
@@ -455,30 +455,30 @@ namespace NInterconnect::NRdma {
                 SlotSize = slotSize;
                 SlotsInBatch = GetSlotsInBatch(slotSize);
             }
-            TMemRegion* TryGetSlot() noexcept {
+            TMemRegionPtr TryGetSlot() noexcept {
                 if (Slots.empty()) {
                     return nullptr;
                 }
                 // TMemRegion* slot = Slots.front();
-                TMemRegion* slot = Slots.front().release();
+                TIntrusivePtr<TMemRegion> slot = Slots.front();
                 Slots.pop_front();
                 return slot;
             }
-            void PutSlot(std::unique_ptr<TMemRegion>&& slot) noexcept {
-                Slots.push_back(std::move(slot));
+            void PutSlot(TIntrusivePtr<TMemRegion> slot) noexcept {
+                Slots.push_back(slot);
             }
-            void PutSlotsBatch(std::list<std::unique_ptr<TMemRegion>>&& slots) noexcept {
+            void PutSlotsBatch(std::list<TIntrusivePtr<TMemRegion>>&& slots) noexcept {
                 Slots.splice(Slots.end(), slots);
             }
-            std::list<std::unique_ptr<TMemRegion>> GetSlotsBatch(ui32 batchSize) {
+            std::list<TIntrusivePtr<TMemRegion>> GetSlotsBatch(ui32 batchSize) {
                 Y_ABORT_UNLESS(Slots.size() >= batchSize, "Not enough slots in chain");
-                std::list<std::unique_ptr<TMemRegion>> res;
+                std::list<TIntrusivePtr<TMemRegion>> res;
                 auto it = Slots.begin();
                 std::advance(it, batchSize);
                 res.splice(res.end(), Slots, Slots.begin(), it);
                 return res;
             }
-            std::list<std::unique_ptr<TMemRegion>> Slots;
+            std::list<TIntrusivePtr<TMemRegion>> Slots;
             ui32 SlotSize;
             ui32 SlotsInBatch;
         };
@@ -489,24 +489,24 @@ namespace NInterconnect::NRdma {
                 SlotSize = slotSize;
                 SlotsInBatch = GetSlotsInBatch(slotSize);
             }
-            std::optional<std::list<std::unique_ptr<TMemRegion>>> GetSlotsBatch() {
-                std::list<std::unique_ptr<TMemRegion>> res;
+            std::optional<std::list<TIntrusivePtr<TMemRegion>>> GetSlotsBatch() {
+                std::list<TIntrusivePtr<TMemRegion>> res;
                 if (FullBatchesSlots.Dequeue(&res)) {
                     return res;
                 }
                 return std::nullopt;
             }
-            void PutSlotsBatches(std::list<std::unique_ptr<TMemRegion>>&& slots) {
+            void PutSlotsBatches(std::list<TIntrusivePtr<TMemRegion>>&& slots) {
                 Y_DEBUG_ABORT_UNLESS(slots.size() == SlotsInBatch, "Invalid slots size: %zu, expected: %u", slots.size(), SlotsInBatch);
                 FullBatchesSlots.Enqueue(std::move(slots));
             }
-            void PutSlotsBatches(std::list<std::list<std::unique_ptr<TMemRegion>>>&& slots) {
+            void PutSlotsBatches(std::list<std::list<TIntrusivePtr<TMemRegion>>>&& slots) {
                 for (auto& batch : slots) {
                     Y_DEBUG_ABORT_UNLESS(batch.size() == SlotsInBatch, "Invalid slots size: %zu, expected: %u", batch.size(), SlotsInBatch);
                     FullBatchesSlots.Enqueue(std::move(batch));
                 }
             }
-            void PutSlot(std::unique_ptr<TMemRegion>&& slot) noexcept {
+            void PutSlot(TIntrusivePtr<TMemRegion> slot) noexcept {
                 std::lock_guard<std::mutex> lock(IncompleteBatchMutex);
                 IncompleteBatch.push_back(std::move(slot));
                 if (IncompleteBatch.size() >= SlotsInBatch) {
@@ -515,12 +515,12 @@ namespace NInterconnect::NRdma {
                 }
             }
 
-            TLockFreeStack<std::list<std::unique_ptr<TMemRegion>>> FullBatchesSlots;
+            TLockFreeStack<std::list<TIntrusivePtr<TMemRegion>>> FullBatchesSlots;
             ui32 SlotSize;
             ui32 SlotsInBatch;
 
             std::mutex IncompleteBatchMutex;
-            std::list<std::unique_ptr<TMemRegion>> IncompleteBatch;
+            std::list<TIntrusivePtr<TMemRegion>> IncompleteBatch;
         };
 
         static constexpr ui32 MinAllocSz = 512;
@@ -547,7 +547,7 @@ namespace NInterconnect::NRdma {
             ~TSlotMemPoolCache() {
                 Stopped = true;
             }
-            TMemRegion* AllocImpl(int size, ui32 flags, TSlotMemPool& pool) noexcept {
+            TMemRegionPtr AllocImpl(int size, ui32 flags, TSlotMemPool& pool) noexcept {
                 if (flags & IMemPool::PAGE_ALIGNED && static_cast<size_t>(size) < pool.Alignment) {
                     size = pool.Alignment;
                 }
@@ -559,7 +559,7 @@ namespace NInterconnect::NRdma {
                 Y_ABORT_UNLESS(chainIndex < ChainsNum, "Invalid chain index: %u", chainIndex);
                 // Try to get slot from local cache
                 auto& localChain = Chains[chainIndex];
-                TMemRegion* slot = localChain.TryGetSlot();
+                TMemRegionPtr slot = localChain.TryGetSlot();
                 if (slot) {
                     return slot;
                 }
@@ -574,9 +574,9 @@ namespace NInterconnect::NRdma {
                 if (!chunk) {
                     return nullptr;
                 }
-                for (size_t i = 0; i < localChain.SlotsInBatch; ++i) {
-                    auto region = std::make_unique<TMemRegion>(chunk, i * localChain.SlotSize, localChain.SlotSize);
-                    localChain.PutSlot(std::move(region));
+                for (ui32 i = 0; i < localChain.SlotsInBatch; ++i) {
+                    //TIntrusivePtr<TMemRegion> region = new TMemRegion(chunk, i * localChain.SlotSize, localChain.SlotSize);
+                    localChain.PutSlot(MakeIntrusive<TMemRegion>(chunk, i * localChain.SlotSize, localChain.SlotSize));
                 }
                 return localChain.TryGetSlot();
             }
@@ -585,13 +585,13 @@ namespace NInterconnect::NRdma {
                 ui32 chainIndex = GetChainIndex(mr.GetSize());
                 if (Stopped) {
                     // current thread is stopped, return mr to global pool
-                    pool.Chains[chainIndex].PutSlot(std::make_unique<TMemRegion>(std::move(mr)));
+                    pool.Chains[chainIndex].PutSlot(MakeIntrusive<TMemRegion>(std::move(mr)));
                     return;
                 }
 
                 auto& chain = Chains[chainIndex];
                 Y_ABORT_UNLESS(chainIndex < ChainsNum, "Invalid chain index: %u", chainIndex);
-                chain.PutSlot(std::make_unique<TMemRegion>(std::move(mr)));
+                chain.PutSlot(MakeIntrusive<TMemRegion>(std::move(mr)));
 
                 if (chain.Slots.size() >= 2 * chain.SlotsInBatch) { // TODO: replace constant 2
                     // If we have too much slots in local cache, put them back to global pool
@@ -632,7 +632,7 @@ namespace NInterconnect::NRdma {
         }
 
     protected:
-        TMemRegion* AllocImpl(int size, ui32 flags) noexcept override {
+        TMemRegionPtr AllocImpl(int size, ui32 flags) noexcept override {
             if (auto memReg = LocalCache.AllocImpl(size, flags, *this)) {
                 memReg->Resize(size);
                 i64 newVal = AllocatedCounter->Add(size);
