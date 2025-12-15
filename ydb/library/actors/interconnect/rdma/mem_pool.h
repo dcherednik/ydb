@@ -44,6 +44,7 @@ namespace NInterconnect::NRdma {
         EInnerType GetInnerType() const noexcept override;
         IContiguousChunk::TPtr Clone() noexcept override;
         TChunkPtr Chunk;
+        ui64 Generation = 0;
     protected:
         const uint32_t Offset;
         uint32_t Size;

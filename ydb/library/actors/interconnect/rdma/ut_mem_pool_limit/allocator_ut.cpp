@@ -55,3 +55,47 @@ TEST_F(TAllocatorSuite, SlotPoolLimit) {
 
     regions.clear();
 }
+
+TEST_F(TAllocatorSuite, SlotPoolHugeAlloc) {
+    const NInterconnect::NRdma::TMemPoolSettings settings {
+        .SizeLimitMb = 32
+    };
+
+   static auto pool = NInterconnect::NRdma::CreateSlotMemPool(nullptr, settings);
+
+    std::vector<NInterconnect::NRdma::TMemRegionPtr> regions;
+    const size_t sz = 8 << 20;
+    for (size_t i = 0; i < 4; i++) {
+        auto reg = pool->Alloc(sz, 0);
+        ASSERT_TRUE(reg->GetAddr()) << "invalid address";
+        regions.push_back(reg);
+    }
+}
+
+TEST_F(TAllocatorSuite, SlotPoolHugeAllocAfterSmall) {
+    const NInterconnect::NRdma::TMemPoolSettings settings {
+        .SizeLimitMb = 32
+    };
+
+    const size_t smallSz = 1 << 20;
+    const size_t hugeSz = 4 << 20;
+
+   static auto pool = NInterconnect::NRdma::CreateSlotMemPool(nullptr, settings);
+
+    std::vector<NInterconnect::NRdma::TMemRegionPtr> regions;
+    regions.reserve(64);
+    for (size_t i = 0; i < 32;i++) {
+        auto reg = pool->Alloc(smallSz, 0);
+        Cerr << i << " " << reg->GetAddr() << Endl;
+        ASSERT_TRUE(reg->GetAddr()) << "invalid address";
+        regions.push_back(reg);
+    }
+    Cerr << "======" << Endl;
+    regions.clear();
+
+    auto reg = pool->Alloc(hugeSz, 0);
+    if (!reg) {
+        Cerr << "allocation failed" << Endl;
+    }
+    ASSERT_TRUE(reg->GetAddr()) << "invalid address";
+}
