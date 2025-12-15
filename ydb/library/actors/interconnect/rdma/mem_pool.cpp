@@ -79,7 +79,8 @@ namespace NInterconnect::NRdma {
     static void* allocateMemory(size_t size, size_t alignment, bool hp);
     static void freeMemory(void* ptr) noexcept;
 
-    class TChunk: public NNonCopyable::TMoveOnly, public TAtomicRefCount<TChunk> {
+    class TChunk: public NNonCopyable::TMoveOnly, public TAtomicRefCount<TChunk>, public TIntrusiveListItem<TChunk> {
+        friend class TMemPoolBase;
     public:
 
     TChunk(std::vector<ibv_mr*>&& mrs, IMemPool* pool) noexcept
@@ -89,7 +90,7 @@ namespace NInterconnect::NRdma {
     }
 
     ~TChunk() {
-        MemPool->DealocateMr(MRs);
+        MemPool->DealocateMr(this);
     }
 
     ibv_mr* GetMr(size_t deviceIndex) noexcept {
@@ -114,6 +115,14 @@ namespace NInterconnect::NRdma {
     private:
         std::vector<ibv_mr*> MRs;
         IMemPool* MemPool;
+        class TChunkUseLock {
+            std::atomic<ui64> Lock = 0;
+        public:
+            void DecUseCnt() {
+                Lock.fetch_sub(1);
+            }
+            bool TryIncUseCnt();
+        };
     };
 
     TMemRegion::TMemRegion(TChunkPtr chunk, uint32_t offset, uint32_t size) noexcept
@@ -376,12 +385,16 @@ namespace NInterconnect::NRdma {
             AllocatedChunksCounter->Inc();
             AllocatedChunks++;
 
-            return MakeIntrusive<TChunk>(std::move(mrs), this);
+            auto chunk = MakeIntrusive<TChunk>(std::move(mrs), this);
+            Chunks.PushBack(chunk.Get());
+            return chunk;
         }
 
-        void DealocateMr(std::vector<ibv_mr*>& mrs) noexcept override {
+        void DealocateMr(TChunk* chunk) noexcept override {
+            std::vector<ibv_mr*>& mrs = chunk->MRs;
             {
                 const std::lock_guard<std::mutex> lock(Mutex);
+                chunk->Unlink();
                 AllocatedChunks--;
                 AllocatedChunksCounter->Dec();
             }
@@ -426,6 +439,7 @@ namespace NInterconnect::NRdma {
         size_t AllocatedChunks = 0;
     private:
         std::mutex Mutex;
+        TIntrusiveList<TChunk> Chunks;
 
         void Tick(NMonotonic::TMonotonic time) noexcept override {
             constexpr TDuration holdTime = TDuration::Seconds(15);

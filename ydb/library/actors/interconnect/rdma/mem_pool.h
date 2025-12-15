@@ -99,7 +99,7 @@ namespace NInterconnect::NRdma {
     protected:
         virtual TMemRegionPtr AllocImpl(int size, ui32 flags) noexcept = 0;
         virtual void Free(TMemRegion&& mr, TChunk& chunk) noexcept = 0;
-        virtual void DealocateMr(std::vector<ibv_mr*>& mrs) noexcept = 0;
+        virtual void DealocateMr(TChunk*) noexcept = 0;
     private:
         virtual void Tick(NMonotonic::TMonotonic time) noexcept = 0;
     };
