@@ -43,8 +43,8 @@ namespace NInterconnect::NRdma {
         size_t GetOccupiedMemorySize() const override;
         EInnerType GetInnerType() const noexcept override;
         IContiguousChunk::TPtr Clone() noexcept override;
-    protected:
         TChunkPtr Chunk;
+    protected:
         const uint32_t Offset;
         uint32_t Size;
         const uint32_t OrigSize;

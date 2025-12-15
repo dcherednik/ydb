@@ -33,6 +33,9 @@ struct ibv_mr {
 #include <mutex>
 #include <thread>
 
+#include <unordered_set>
+#include <set>
+
 #include <cstdlib>
 #include <cstring>
 #include <cerrno>
@@ -48,6 +51,27 @@ struct ibv_mr {
 static constexpr size_t HPageSz = (1 << 21);
 
 using ::NMonitoring::TDynamicCounters;
+
+struct TMemRegionHash {
+public:
+    size_t operator()(const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& mr) const {
+        return (ui64)mr->Chunk.Get();
+    }
+};
+
+template <>
+struct std::less<TIntrusivePtr<NInterconnect::NRdma::TMemRegion>> {
+    bool operator ()(const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& a, const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& b) const {
+        return a->Chunk.Get() < b->Chunk.Get();
+    }
+};
+
+template <>
+struct std::equal_to<TIntrusivePtr<NInterconnect::NRdma::TMemRegion>> {
+    bool operator()(const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& a, const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& b) const {
+        return a->Chunk.Get() == b->Chunk.Get(); 
+    }
+};
 
 namespace NInterconnect::NRdma {
 
@@ -460,25 +484,30 @@ namespace NInterconnect::NRdma {
                     return nullptr;
                 }
                 // TMemRegion* slot = Slots.front();
-                TIntrusivePtr<TMemRegion> slot = Slots.front();
-                Slots.pop_front();
+                auto it = Slots.begin();
+                TIntrusivePtr<TMemRegion> slot = *it;
+                Slots.erase(it);
                 return slot;
             }
             void PutSlot(TIntrusivePtr<TMemRegion> slot) noexcept {
-                Slots.push_back(slot);
+                Slots.insert(slot);
             }
             void PutSlotsBatch(std::list<TIntrusivePtr<TMemRegion>>&& slots) noexcept {
-                Slots.splice(Slots.end(), slots);
+                for (auto x : slots)
+                    PutSlot(x);
             }
             std::list<TIntrusivePtr<TMemRegion>> GetSlotsBatch(ui32 batchSize) {
                 Y_ABORT_UNLESS(Slots.size() >= batchSize, "Not enough slots in chain");
                 std::list<TIntrusivePtr<TMemRegion>> res;
                 auto it = Slots.begin();
-                std::advance(it, batchSize);
-                res.splice(res.end(), Slots, Slots.begin(), it);
+                //std::advance(it, batchSize);
+                for (size_t i = 0; i < batchSize; i++, it++) {
+                    res.insert(res.end(), *it);
+                }
+                //res.splice(res.end(), Slots, Slots.begin(), it);
                 return res;
             }
-            std::list<TIntrusivePtr<TMemRegion>> Slots;
+            std::multiset<TIntrusivePtr<TMemRegion>> Slots;
             ui32 SlotSize;
             ui32 SlotsInBatch;
         };
