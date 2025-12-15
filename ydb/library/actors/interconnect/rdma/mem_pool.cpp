@@ -62,14 +62,14 @@ public:
 template <>
 struct std::less<TIntrusivePtr<NInterconnect::NRdma::TMemRegion>> {
     bool operator ()(const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& a, const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& b) const {
-        return a->Chunk.Get() < b->Chunk.Get();
+        return /*a.Get() < b.Get() &&*/ a->Chunk.Get() < b->Chunk.Get();
     }
 };
 
 template <>
 struct std::equal_to<TIntrusivePtr<NInterconnect::NRdma::TMemRegion>> {
     bool operator()(const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& a, const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& b) const {
-        return a->Chunk.Get() == b->Chunk.Get(); 
+        return /*a.Get() == b.Get() &&*/ a->Chunk.Get() == b->Chunk.Get(); 
     }
 };
 
@@ -507,7 +507,16 @@ namespace NInterconnect::NRdma {
                 //res.splice(res.end(), Slots, Slots.begin(), it);
                 return res;
             }
+            //TODO: It shoult be possible to improve it using more optimised container
+            // We need to group all regions with same Chunk, multiset is just naive approach but it works
+            // unordered_multiset works much worse due to div op inside hash calculation.
+            //
+            // Some ideas to think about:
+            //  - The size of chunk relative large (32Mb+) - so 25 low bits in addres are same
+            //  - The user address space less than 64 bits
+            //  - Probably we can reserve address on startup
             std::multiset<TIntrusivePtr<TMemRegion>> Slots;
+
             ui32 SlotSize;
             ui32 SlotsInBatch;
         };
