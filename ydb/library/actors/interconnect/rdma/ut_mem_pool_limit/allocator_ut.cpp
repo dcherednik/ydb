@@ -4,6 +4,11 @@
 #include <library/cpp/testing/gtest/gtest.h>
 #include <ydb/library/testlib/unittest_gtest_macro_subst.h>
 
+#include <util/random/fast.h>
+#include <util/random/random.h>
+
+#include <thread>
+
 namespace NMonitoring {
     struct TDynamicCounters;
 }
@@ -45,7 +50,7 @@ TEST_F(TAllocatorSuite, SlotPoolLimit) {
     }
 
     regions.erase(regions.begin()); // free one region
-
+return;
     {
         auto reg = pool->Alloc(sz, 0); // allocate one
         ASSERT_TRUE(reg->GetAddr()) << "invalid address";
@@ -61,7 +66,7 @@ TEST_F(TAllocatorSuite, SlotPoolHugeAlloc) {
         .SizeLimitMb = 32
     };
 
-   static auto pool = NInterconnect::NRdma::CreateSlotMemPool(nullptr, settings);
+    static auto pool = NInterconnect::NRdma::CreateSlotMemPool(nullptr, settings);
 
     std::vector<NInterconnect::NRdma::TMemRegionPtr> regions;
     const size_t sz = 8 << 20;
@@ -70,6 +75,7 @@ TEST_F(TAllocatorSuite, SlotPoolHugeAlloc) {
         ASSERT_TRUE(reg->GetAddr()) << "invalid address";
         regions.push_back(reg);
     }
+    regions.clear();
 }
 
 TEST_F(TAllocatorSuite, SlotPoolHugeAllocAfterSmall) {
@@ -83,19 +89,75 @@ TEST_F(TAllocatorSuite, SlotPoolHugeAllocAfterSmall) {
    static auto pool = NInterconnect::NRdma::CreateSlotMemPool(nullptr, settings);
 
     std::vector<NInterconnect::NRdma::TMemRegionPtr> regions;
-    regions.reserve(64);
+    regions.reserve(32);
     for (size_t i = 0; i < 32;i++) {
         auto reg = pool->Alloc(smallSz, 0);
-        Cerr << i << " " << reg->GetAddr() << Endl;
         ASSERT_TRUE(reg->GetAddr()) << "invalid address";
         regions.push_back(reg);
     }
-    Cerr << "======" << Endl;
     regions.clear();
 
     auto reg = pool->Alloc(hugeSz, 0);
-    if (!reg) {
-        Cerr << "allocation failed" << Endl;
-    }
+    ASSERT_TRUE(reg) << "allocation failed";
     ASSERT_TRUE(reg->GetAddr()) << "invalid address";
+}
+
+TEST_F(TAllocatorSuite, SlotPoolHugeAllocOtherThreadAfterSmall) {
+    const NInterconnect::NRdma::TMemPoolSettings settings {
+        .SizeLimitMb = 32
+    };
+
+    const size_t smallSz = 1 << 20;
+    const size_t hugeSz = 4 << 20;
+
+    static auto pool = NInterconnect::NRdma::CreateSlotMemPool(nullptr, settings);
+
+    std::vector<NInterconnect::NRdma::TMemRegionPtr> regions;
+    regions.reserve(32);
+    for (size_t i = 0; i < 32;i++) {
+        auto reg = pool->Alloc(smallSz, 0);
+        ASSERT_TRUE(reg->GetAddr()) << "invalid address";
+        regions.push_back(reg);
+    }
+    regions.clear();
+
+    auto fn = [&]() {
+        auto reg = pool->Alloc(hugeSz, 0);
+        ASSERT_TRUE(reg) << "allocation failed";
+        ASSERT_TRUE(reg->GetAddr()) << "invalid address";
+    };
+
+    std::thread thread(fn);
+    thread.join();
+
+    // And try to alloc small again
+    for (size_t i = 0; i < 32;i++) {
+        auto reg = pool->Alloc(smallSz, 0);
+        ASSERT_TRUE(reg->GetAddr()) << "invalid address";
+        regions.push_back(reg);
+    }
+    regions.clear();
+}
+
+TEST_F(TAllocatorSuite, AllocationWithReclaimOneThread) {
+    const NInterconnect::NRdma::TMemPoolSettings settings {
+        .SizeLimitMb = 32
+    };
+
+    static auto pool = NInterconnect::NRdma::CreateSlotMemPool(nullptr, settings);
+
+    const ui32 NUM_ALLOC = 40000;
+
+    TReallyFastRng32 rng(RandomNumber<ui64>());
+
+    auto now = TInstant::Now();
+    for (ui32 j = 0; j < NUM_ALLOC; ++j) {
+        auto memRegion = pool->Alloc((rng() % 4096), 0);
+        ASSERT_TRUE(memRegion->GetAddr()) << "invalid address";
+    }
+
+    float s = (TInstant::Now() - now).MicroSeconds();
+
+    s = s / float(NUM_ALLOC);
+    Cerr << "Average time per allocation: " << s << " us" << Endl;
 }

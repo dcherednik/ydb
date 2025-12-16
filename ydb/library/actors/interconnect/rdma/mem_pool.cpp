@@ -52,24 +52,9 @@ static constexpr size_t HPageSz = (1 << 21);
 
 using ::NMonitoring::TDynamicCounters;
 
-struct TMemRegionHash {
-public:
-    size_t operator()(const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& mr) const {
-        return (ui64)mr->Chunk.Get();
-    }
-};
-
-template <>
-struct std::less<TIntrusivePtr<NInterconnect::NRdma::TMemRegion>> {
+struct TMemRegCompare {
     bool operator ()(const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& a, const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& b) const {
-        return /*a.Get() < b.Get() &&*/ a->Chunk.Get() < b->Chunk.Get();
-    }
-};
-
-template <>
-struct std::equal_to<TIntrusivePtr<NInterconnect::NRdma::TMemRegion>> {
-    bool operator()(const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& a, const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& b) const {
-        return /*a.Get() == b.Get() &&*/ a->Chunk.Get() == b->Chunk.Get(); 
+        return a->Chunk.Get() < b->Chunk.Get();
     }
 };
 
@@ -112,19 +97,19 @@ namespace NInterconnect::NRdma {
         return MemPool->Alloc(size, flags);
     }
 
-    bool TryReclaim() {
+    bool TryReclaim() noexcept {
         return ReclaimSemaphore.TryReclaim();
     }
 
-    void DecUseCnt() {
-        ReclaimSemaphore.DecUseCnt();
+    void DoRelease() noexcept {
+        ReclaimSemaphore.Release();
     }
 
-    bool TryIncUseCnt(ui64 expGeneration) {
-        return ReclaimSemaphore.TryIncUseCnt(expGeneration);
+    bool TryAcquire(ui64 expGeneration) noexcept {
+        return ReclaimSemaphore.TryAcquire(expGeneration);
     }
 
-    ui64 GetGeneration() const {
+    ui64 GetGeneration() const noexcept {
         return ReclaimSemaphore.GetGeneration();
     }
 
@@ -137,26 +122,30 @@ namespace NInterconnect::NRdma {
             static constexpr size_t UseCountBits = 16;
             static constexpr size_t UseCountMask = (1u << UseCountBits) - 1u;
         public:
-            void DecUseCnt() {
+            void Release() noexcept {
+                //Cerr << "Release: " << (Lock.load() & UseCountMask) << Endl;
+                Y_ABORT_UNLESS((Lock.load() & UseCountMask) > 0);
                 Lock.fetch_sub(1);
             }
 
-            bool TryIncUseCnt(ui64 expectedGeneration) {
+            bool TryAcquire(ui64 expectedGeneration) noexcept {
+                //Cerr << "TryAcquire: " << (Lock.load() & UseCountMask) << Endl;
                 ui64 newX = Lock.fetch_add(1, std::memory_order_release);
                 if ((newX >> UseCountBits) == expectedGeneration) {
                     return true;
                 } else {
                     Lock.fetch_sub(1, std::memory_order_release);
-                 //   Cerr << "Expected " << expectedGeneration << " got " << (newX >> UseCountBits) << Endl;
                     return false;
                 }
             }
 
-            bool TryReclaim() {
+            bool TryReclaim() noexcept {
                 ui64 oldX = Lock.load(std::memory_order_relaxed);
+              //  Cerr << "use count " << (oldX & UseCountMask) << Endl; 
                 ui64 newX;
                 do {
-                    if (oldX & UseCountMask != 0) {
+                    if ((oldX & UseCountMask) != 0) {
+                     //   Cerr << "ret false" << Endl;
                         return false;
                     }
                     // Bump generation. We have 48 bits for generation. 
@@ -169,7 +158,7 @@ namespace NInterconnect::NRdma {
                 return true;
             } 
             
-            ui64 GetGeneration() const {
+            ui64 GetGeneration() const noexcept {
                 return Lock.load(std::memory_order_relaxed) >> UseCountBits; 
             }
         } ReclaimSemaphore;
@@ -186,7 +175,8 @@ namespace NInterconnect::NRdma {
     }
 
     TMemRegion::~TMemRegion() {
-        Chunk->Free(std::move(*this));
+        if (Chunk)
+            Chunk->Free(std::move(*this));
     }
 
     void* TMemRegion::GetAddr() const {
@@ -415,8 +405,7 @@ namespace NInterconnect::NRdma {
             const std::lock_guard<std::mutex> lock(Mutex);
             Y_ABORT_UNLESS(AllocatedChunks <= MaxChunk);
 
-            if (AllocatedChunks == MaxChunk) {
-               // Cerr << "Limit reached, try to find neghbour" << Endl;
+            if (Y_UNLIKELY(AllocatedChunks == MaxChunk)) {
                 return TryReclaim();
             }
 
@@ -477,11 +466,11 @@ namespace NInterconnect::NRdma {
             }
         }
     private:
-        TChunkPtr TryReclaim() {
+        TChunkPtr TryReclaim() noexcept {
             for (auto it = Chunks.Begin(); it!= Chunks.End(); it++) {
                 //Cerr << "RefCnt: "  << it->RefCount() << Endl;
-                if(it->TryReclaim()) {
-                   // Cerr << "found someone: " << it->GetMr(0)->addr << Endl;
+                if (it->TryReclaim()) {
+                    //Cerr << "found someone: " << it->GetMr(0)->addr << Endl;
                     return &(*it);
                 }
             }
@@ -564,10 +553,17 @@ namespace NInterconnect::NRdma {
                 // TMemRegion* slot = Slots.front();
                 auto it = Slots.begin();
                 TIntrusivePtr<TMemRegion> slot = *it;
-                Slots.erase(it);
-                if (slot->Chunk->TryIncUseCnt(slot->Generation)) {
+                const TChunk* const curChunkPtr = slot->Chunk.Get();
+                Slots.erase(it++);
+                if (slot->Chunk->TryAcquire(slot->Generation)) {
                     return slot;
                 } else {
+                    //slot->Chunk.Reset();
+                    while (it != Slots.end() && (*it)->Chunk.Get() == curChunkPtr) {
+                        //Cerr << "SAME CHUNK" << Endl;
+                        //(*it)->Chunk.Reset(); 
+                        Slots.erase(it++);
+                    }
                     return TryGetSlot();
                 }
             }
@@ -597,7 +593,7 @@ namespace NInterconnect::NRdma {
             //  - The size of chunk relative large (32Mb+) - so 25 low bits in addres are same
             //  - The user address space less than 64 bits
             //  - Probably we can reserve address on startup
-            std::multiset<TIntrusivePtr<TMemRegion>> Slots;
+            std::multiset<TIntrusivePtr<TMemRegion>, TMemRegCompare> Slots;
 
             ui32 SlotSize;
             ui32 SlotsInBatch;
@@ -707,13 +703,17 @@ namespace NInterconnect::NRdma {
             }
 
             void Free(TMemRegion&& mr, TSlotMemPool& pool) noexcept {
-                mr.Chunk->DecUseCnt();
+                if (mr.Generation != mr.Chunk->GetGeneration()) {
+                    return;
+                }
                 ui32 chainIndex = GetChainIndex(mr.GetSize());
                 if (Stopped) {
                     // current thread is stopped, return mr to global pool
                     pool.Chains[chainIndex].PutSlot(MakeIntrusive<TMemRegion>(std::move(mr)));
                     return;
                 }
+
+                mr.Chunk->DoRelease();
 
                 auto& chain = Chains[chainIndex];
                 Y_ABORT_UNLESS(chainIndex < ChainsNum, "Invalid chain index: %u", chainIndex);
@@ -746,6 +746,23 @@ namespace NInterconnect::NRdma {
         {
             for (ui32 i = GetPowerOfTwo(MinAllocSz); i <= GetPowerOfTwo(MaxAllocSz); ++i) {
                 Chains[GetChainIndex(1 << i)].Init(1 << i);
+            }
+        }
+
+        ~TSlotMemPool() {
+            for (size_t i = 0; i < Chains.size(); i++) {
+                TLockFreeChain& chain = Chains[i]; 
+                for (auto& x : chain.IncompleteBatch) {
+                    x->Chunk.Reset();
+                }
+
+                std::list<TIntrusivePtr<TMemRegion>> tmp;
+                while (chain.FullBatchesSlots.Dequeue(&tmp)) {
+                    for (auto& x : tmp) {
+                        x->Chunk.Reset();
+                    }
+                    tmp.clear();
+                }
             }
         }
 
