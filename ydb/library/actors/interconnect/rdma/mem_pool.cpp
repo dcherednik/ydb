@@ -53,8 +53,15 @@ static constexpr size_t HPageSz = (1 << 21);
 using ::NMonitoring::TDynamicCounters;
 
 struct TMemRegCompare {
+    using is_transparent = void;
     bool operator ()(const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& a, const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& b) const {
         return a->Chunk.Get() < b->Chunk.Get();
+    }
+    bool operator ()(const NInterconnect::NRdma::TChunkPtr& a, const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& b) const {
+        return a.Get() < b->Chunk.Get();
+    }
+    bool operator ()(const TIntrusivePtr<NInterconnect::NRdma::TMemRegion>& a, const NInterconnect::NRdma::TChunkPtr& b) const {
+        return a->Chunk.Get() < b.Get();
     }
 };
 
@@ -123,7 +130,8 @@ namespace NInterconnect::NRdma {
             static constexpr size_t UseCountMask = (1u << UseCountBits) - 1u;
         public:
             void Release() noexcept {
-                //Cerr << "Release: " << (Lock.load() & UseCountMask) << Endl;
+                //if ((Lock.load() & UseCountMask) <= 0) 
+                //    Cerr << "Release: " << (Lock.load() & UseCountMask) << Endl;
                 Y_ABORT_UNLESS((Lock.load() & UseCountMask) > 0);
                 Lock.fetch_sub(1);
             }
@@ -406,6 +414,7 @@ namespace NInterconnect::NRdma {
             Y_ABORT_UNLESS(AllocatedChunks <= MaxChunk);
 
             if (Y_UNLIKELY(AllocatedChunks == MaxChunk)) {
+                //return nullptr;
                 return TryReclaim();
             }
 
@@ -470,7 +479,7 @@ namespace NInterconnect::NRdma {
             for (auto it = Chunks.Begin(); it!= Chunks.End(); it++) {
                 //Cerr << "RefCnt: "  << it->RefCount() << Endl;
                 if (it->TryReclaim()) {
-                    //Cerr << "found someone: " << it->GetMr(0)->addr << Endl;
+                  //  Cerr << "found someone: " << it->GetMr(0)->addr << Endl;
                     return &(*it);
                 }
             }
@@ -541,6 +550,7 @@ namespace NInterconnect::NRdma {
 
     class TSlotMemPool: public TMemPoolBase {
         struct TChain {
+            using TMemRegcontainer = std::multiset<TIntrusivePtr<TMemRegion>, TMemRegCompare>; 
             TChain() = default;
             void Init(ui32 slotSize) {
                 SlotSize = slotSize;
@@ -554,14 +564,13 @@ namespace NInterconnect::NRdma {
                 auto it = Slots.begin();
                 TIntrusivePtr<TMemRegion> slot = *it;
                 const TChunk* const curChunkPtr = slot->Chunk.Get();
-                Slots.erase(it++);
                 if (slot->Chunk->TryAcquire(slot->Generation)) {
+                    Slots.erase(it);
                     return slot;
                 } else {
-                    //slot->Chunk.Reset();
+                    //Slots.erase(*it);
                     while (it != Slots.end() && (*it)->Chunk.Get() == curChunkPtr) {
-                        //Cerr << "SAME CHUNK" << Endl;
-                        //(*it)->Chunk.Reset(); 
+                        (*it)->Chunk.Reset();
                         Slots.erase(it++);
                     }
                     return TryGetSlot();
@@ -570,6 +579,12 @@ namespace NInterconnect::NRdma {
             void PutSlot(TIntrusivePtr<TMemRegion> slot) noexcept {
                 Slots.insert(slot);
             }
+            TMemRegcontainer::iterator PutSlot(TIntrusivePtr<TMemRegion> slot, TMemRegcontainer::iterator hint) noexcept {
+                return Slots.insert(hint, slot);
+            }
+            TMemRegcontainer::iterator FindHint(const TChunkPtr& p) noexcept {
+                return Slots.find(p);
+            } 
             void PutSlotsBatch(std::list<TIntrusivePtr<TMemRegion>>&& slots) noexcept {
                 for (auto x : slots)
                     PutSlot(x);
@@ -593,7 +608,7 @@ namespace NInterconnect::NRdma {
             //  - The size of chunk relative large (32Mb+) - so 25 low bits in addres are same
             //  - The user address space less than 64 bits
             //  - Probably we can reserve address on startup
-            std::multiset<TIntrusivePtr<TMemRegion>, TMemRegCompare> Slots;
+            TMemRegcontainer Slots;
 
             ui32 SlotSize;
             ui32 SlotsInBatch;
@@ -663,6 +678,21 @@ namespace NInterconnect::NRdma {
             ~TSlotMemPoolCache() {
                 Stopped = true;
             }
+
+            bool AllocAndSplitNewChunk(TChain& chain, TSlotMemPool& pool) {
+                TChunkPtr chunk = pool.AllocNewChunk(BatchSizeBytes, true);
+                if (!chunk) {
+                    return false;
+                }
+                TChain::TMemRegcontainer::iterator it = chain.FindHint(chunk);
+                for (ui32 i = 0; i < chain.SlotsInBatch; ++i) {
+                    auto x = MakeIntrusive<TMemRegion>(chunk, i * chain.SlotSize, chain.SlotSize);
+                    x->Generation = chunk->GetGeneration();
+                    it = chain.PutSlot(x, it);
+                }
+                return true;
+            }
+
             TMemRegionPtr AllocImpl(int size, ui32 flags, TSlotMemPool& pool) noexcept {
                // Cerr << "AllocImpl" << Endl;
                 if (flags & IMemPool::PAGE_ALIGNED && static_cast<size_t>(size) < pool.Alignment) {
@@ -688,26 +718,20 @@ namespace NInterconnect::NRdma {
                 }
                 // If no slots in global pool, allocate new chunk
                 //Cerr << "TryToAllocNewChunk" << Endl;
-                auto chunk = pool.AllocNewChunk(BatchSizeBytes, true);
-                if (!chunk) {
+                if (!AllocAndSplitNewChunk(localChain, pool)) {
                     return nullptr;
                 }
-                //Cerr << "TryToAllocNewChunk done" << Endl;
-                for (ui32 i = 0; i < localChain.SlotsInBatch; ++i) {
-                    //TIntrusivePtr<TMemRegion> region = new TMemRegion(chunk, i * localChain.SlotSize, localChain.SlotSize);
-                    auto x = MakeIntrusive<TMemRegion>(chunk, i * localChain.SlotSize, localChain.SlotSize);
-                    x->Generation = chunk->GetGeneration();
-                    localChain.PutSlot(x);
-                }
+                
                 return localChain.TryGetSlot();
             }
 
             void Free(TMemRegion&& mr, TSlotMemPool& pool) noexcept {
-                if (mr.Generation != mr.Chunk->GetGeneration()) {
-                    return;
-                }
+                //if (mr.Generation != mr.Chunk->GetGeneration()) {
+                //    return;
+                //}
                 ui32 chainIndex = GetChainIndex(mr.GetSize());
                 if (Stopped) {
+                    //Cerr << "ret stopped" << Endl;
                     // current thread is stopped, return mr to global pool
                     pool.Chains[chainIndex].PutSlot(MakeIntrusive<TMemRegion>(std::move(mr)));
                     return;

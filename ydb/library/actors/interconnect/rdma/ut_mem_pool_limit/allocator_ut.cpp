@@ -139,20 +139,22 @@ TEST_F(TAllocatorSuite, SlotPoolHugeAllocOtherThreadAfterSmall) {
     regions.clear();
 }
 
-TEST_F(TAllocatorSuite, AllocationWithReclaimOneThread) {
+TEST_F(TAllocatorSuite, AllocationRandSizeWithReclaimOneThread) {
     const NInterconnect::NRdma::TMemPoolSettings settings {
         .SizeLimitMb = 32
     };
 
     static auto pool = NInterconnect::NRdma::CreateSlotMemPool(nullptr, settings);
 
-    const ui32 NUM_ALLOC = 40000;
+    constexpr ui32 NUM_ALLOC = 40000;
+    constexpr ui32 MAX_REG_SZ = 2u << 20;
 
     TReallyFastRng32 rng(RandomNumber<ui64>());
 
     auto now = TInstant::Now();
     for (ui32 j = 0; j < NUM_ALLOC; ++j) {
-        auto memRegion = pool->Alloc((rng() % 4096), 0);
+        auto memRegion = pool->Alloc(((rng() % MAX_REG_SZ) | 1u), 0);
+        ASSERT_TRUE(memRegion) << "allocation failed";
         ASSERT_TRUE(memRegion->GetAddr()) << "invalid address";
     }
 
@@ -160,4 +162,108 @@ TEST_F(TAllocatorSuite, AllocationWithReclaimOneThread) {
 
     s = s / float(NUM_ALLOC);
     Cerr << "Average time per allocation: " << s << " us" << Endl;
+}
+
+TEST_F(TAllocatorSuite, AllocationWithReclaimTwoThreads) {
+    const NInterconnect::NRdma::TMemPoolSettings settings {
+        .SizeLimitMb = 32
+    };
+
+    static auto pool = NInterconnect::NRdma::CreateSlotMemPool(nullptr, settings);
+
+    auto allocFn = [&](size_t sz, size_t num, float& s, bool holdAllocations) {
+        size_t j = 0;
+
+        auto now = TInstant::Now();
+        std::vector<NInterconnect::NRdma::TMemRegionPtr> alls;
+        alls.reserve(num);
+        while (j < num) {
+            auto memRegion = pool->Alloc(sz, 0);
+            if (!memRegion) {
+                continue;
+            }
+            ASSERT_TRUE(memRegion) << "allocation failed";
+            ASSERT_TRUE(memRegion->GetAddr()) << "invalid address";
+            if (holdAllocations) {
+                alls.push_back(memRegion);
+            }
+            j++;
+        }
+
+        s = (TInstant::Now() - now).MicroSeconds();
+    };
+
+    Cerr << "===" << Endl;
+
+    for (size_t i = 0; i < 10; i++) {
+        float s0 = 0.0;
+        float s1 = 0.0;
+        size_t numAlloc0 = 100000;
+        size_t numAlloc1 = 100000;
+        std::thread thread0(allocFn, 512, numAlloc0, std::ref(s0), false);
+        std::thread thread1(allocFn, 512, numAlloc1, std::ref(s1), false);
+
+        thread0.join();
+        thread1.join();
+
+        s0 = s0 / float(numAlloc0);
+        s1 = s1 / float(numAlloc1);
+        Cerr << "Average time per allocation t0: " << s0 << " us, t1: " << s1 << " us" << Endl;
+    }
+
+    Cerr << "===" << Endl;
+
+    // Do the same but with different sizes
+    for (size_t i = 0; i < 10; i++) {
+        float s0 = 0.0;
+        float s1 = 0.0;
+        size_t numAlloc0 = 100000;
+        size_t numAlloc1 = 100000;
+        std::thread thread0(allocFn, 512, numAlloc0, std::ref(s0), false);
+        std::thread thread1(allocFn, 32768, numAlloc1, std::ref(s1), false);
+
+        thread0.join();
+        thread1.join();
+
+        s0 = s0 / float(numAlloc0);
+        s1 = s1 / float(numAlloc1);
+        Cerr << "Average time per allocation t0: " << s0 << " us, t1: " << s1 << " us" << Endl;
+    }
+
+    Cerr << "===" << Endl;
+
+    for (size_t i = 0; i < 10; i++) {
+        float s0 = 0.0;
+        float s1 = 0.0;
+        size_t numAlloc0 = 10000;
+        size_t numAlloc1 = 10000;
+        std::thread thread0(allocFn, 512, numAlloc0, std::ref(s0), true);
+        std::thread thread1(allocFn, 512, numAlloc1, std::ref(s1), true);
+
+        thread0.join();
+        thread1.join();
+
+        s0 = s0 / float(numAlloc0);
+        s1 = s1 / float(numAlloc1);
+        Cerr << "Average time per allocation t0: " << s0 << " us, t1: " << s1 << " us" << Endl;
+    }
+
+    Cerr << "===" << Endl;
+
+    for (size_t i = 0; i < 10; i++) {
+        float s0 = 0.0;
+        float s1 = 0.0;
+        size_t numAlloc0 = 10000;
+        size_t numAlloc1 = 500;
+        std::thread thread0(allocFn, 512, numAlloc0, std::ref(s0), true);
+        std::thread thread1(allocFn, 32768, numAlloc1, std::ref(s1), true);
+
+        thread0.join();
+        thread1.join();
+
+        s0 = s0 / float(numAlloc0);
+        s1 = s1 / float(numAlloc1);
+        Cerr << "Average time per allocation t0: " << s0 << " us, t1: " << s1 << " us" << Endl;
+    }
+
 }

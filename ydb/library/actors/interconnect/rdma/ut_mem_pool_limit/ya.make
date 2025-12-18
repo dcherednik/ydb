@@ -1,5 +1,5 @@
 GTEST()
-
+#TIMEOUT(60)
 IF (OS_LINUX AND SANITIZER_TYPE != "memory")
 
 IF (SANITIZER_TYPE == "thread")
