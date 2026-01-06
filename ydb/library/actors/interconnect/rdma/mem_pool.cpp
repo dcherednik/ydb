@@ -120,14 +120,19 @@ namespace NInterconnect::NRdma {
         return ReclaimSemaphore.GetGeneration();
     }
 
+    void VerifySingleUsage() const noexcept {
+        ReclaimSemaphore.VerifySingleUsage();
+    }
+
     private:
         std::vector<ibv_mr*> MRs;
         IMemPool* MemPool;
         class TChunkUseLock {
             std::atomic<ui64> Lock = 0;
-            static constexpr size_t GenerationBits = 48;
-            static constexpr size_t UseCountBits = 16;
-            static constexpr size_t UseCountMask = (1u << UseCountBits) - 1u;
+            static constexpr ui64 ReclamingBitMask = 1ul << 63;
+            static constexpr size_t GenerationBits = 47u;
+            static constexpr size_t UseCountBits = 16u;
+            static constexpr ui64 UseCountMask = (1ul << UseCountBits) - 1u;
         public:
             void Release() noexcept {
                 //if ((Lock.load() & UseCountMask) <= 0) 
@@ -138,8 +143,22 @@ namespace NInterconnect::NRdma {
 
             bool TryAcquire(ui64 expectedGeneration) noexcept {
                 //Cerr << "TryAcquire: " << (Lock.load() & UseCountMask) << Endl;
-                ui64 newX = Lock.fetch_add(1, std::memory_order_release);
-                if ((newX >> UseCountBits) == expectedGeneration) {
+                ui64 x = Lock.fetch_add(1, std::memory_order_acq_rel);
+                //if (((x) >> UseCountBits) == expectedGeneration) {
+                if (((x & (~ReclamingBitMask)) >> UseCountBits) == expectedGeneration) {
+                    // Check we need to mark "reclaiming done"
+                    if (x & ReclamingBitMask) {
+                        Y_ABORT_UNLESS((x & UseCountMask) == 0);
+                        //Cerr << "Reclaim bit weas set" << Endl;
+                        x += 1; // value already incremented in memory
+                        ui64 newX = x & (~ReclamingBitMask);
+                        if (!Lock.compare_exchange_strong(x, newX,
+                            std::memory_order_release, std::memory_order_relaxed)) {
+                                Y_ABORT_UNLESS(false, "ZZZZZ");
+                                Lock.fetch_sub(1, std::memory_order_release);
+                                return false;
+                            }
+                    }
                     return true;
                 } else {
                     Lock.fetch_sub(1, std::memory_order_release);
@@ -152,6 +171,12 @@ namespace NInterconnect::NRdma {
               //  Cerr << "use count " << (oldX & UseCountMask) << Endl; 
                 ui64 newX;
                 do {
+                    // Check the chunk is currently not in progress of reclaim
+                    if (oldX & ReclamingBitMask) {
+                        //Cerr << "chunk in reclaim progress..." << Endl;
+                        return false;
+                    }
+                    // Check use count
                     if ((oldX & UseCountMask) != 0) {
                      //   Cerr << "ret false" << Endl;
                         return false;
@@ -159,7 +184,7 @@ namespace NInterconnect::NRdma {
                     // Bump generation. We have 48 bits for generation. 
                     // 1 << 48 is 281474976710656, which mean even if we have 1000000 reclamations per second
                     // we need ((1 << 48) / 1000000 ) / 3600 / 24 / 365 = 8.9 yaar to rollower this counter
-                    newX = ((oldX >> UseCountBits) + 1u) << UseCountBits;
+                    newX = (((oldX >> UseCountBits) + 1u) << UseCountBits) | ReclamingBitMask;
                 } while (!Lock.compare_exchange_weak(oldX, newX,
                     std::memory_order_release, std::memory_order_relaxed));
 
@@ -167,7 +192,18 @@ namespace NInterconnect::NRdma {
             } 
             
             ui64 GetGeneration() const noexcept {
-                return Lock.load(std::memory_order_relaxed) >> UseCountBits; 
+                return (Lock.load(std::memory_order_relaxed) & ~ReclamingBitMask) >> UseCountBits; 
+            }
+
+            void VerifySingleUsage() const noexcept {
+                auto x = Lock.load();
+                if ((x & UseCountMask) != 0ull) {
+                    Cerr << x << Endl;
+                }
+                Y_ABORT_UNLESS((x & UseCountMask) == 0ull);
+                if (GetGeneration()) {
+                    Y_ABORT_UNLESS((x & ReclamingBitMask));
+                }
             }
         } ReclaimSemaphore;
     };
@@ -564,12 +600,17 @@ namespace NInterconnect::NRdma {
                 auto it = Slots.begin();
                 TIntrusivePtr<TMemRegion> slot = *it;
                 const TChunk* const curChunkPtr = slot->Chunk.Get();
-                if (slot->Chunk->TryAcquire(slot->Generation)) {
+                const ui64 curGeneration = slot->Generation; 
+                if (slot->Chunk->TryAcquire(curGeneration)) {
                     Slots.erase(it);
                     return slot;
                 } else {
+                    //if ((*it)->Chunk.Get() == curChunkPtr) {
+                    //(*it)->Chunk.Reset();
+                    //Slots.erase(it);
+                    //}
                     //Slots.erase(*it);
-                    while (it != Slots.end() && (*it)->Chunk.Get() == curChunkPtr) {
+                    while ((it != Slots.end()) && ((*it)->Chunk.Get() == curChunkPtr) && ((*it)->Generation == curGeneration)) {
                         (*it)->Chunk.Reset();
                         Slots.erase(it++);
                     }
@@ -586,8 +627,13 @@ namespace NInterconnect::NRdma {
                 return Slots.find(p);
             } 
             void PutSlotsBatch(std::list<TIntrusivePtr<TMemRegion>>&& slots) noexcept {
-                for (auto x : slots)
-                    PutSlot(x);
+                for (auto x : slots) {
+                    //if (x->Generation == x->Chunk->GetGeneration()) {
+                        PutSlot(x);
+                    //} else {
+                    //    x->Chunk.Reset();
+                    //}
+                }
             }
             std::list<TIntrusivePtr<TMemRegion>> GetSlotsBatch(ui32 batchSize) {
                 Y_ABORT_UNLESS(Slots.size() >= batchSize, "Not enough slots in chain");
@@ -625,6 +671,12 @@ namespace NInterconnect::NRdma {
                 if (FullBatchesSlots.Dequeue(&res)) {
                     return res;
                 }
+                /*if (IncompleteBatchMutex.try_lock()) {
+                    if (IncompleteBatch.size()) {
+                        Cerr << "HasImcompleted " << IncompleteBatch.size()  << Endl;
+                    }
+                    IncompleteBatchMutex.unlock();
+                }*/
                 return std::nullopt;
             }
             void PutSlotsBatches(std::list<TIntrusivePtr<TMemRegion>>&& slots) {
@@ -684,6 +736,7 @@ namespace NInterconnect::NRdma {
                 if (!chunk) {
                     return false;
                 }
+                //chunk->VerifySingleUsage();
                 TChain::TMemRegcontainer::iterator it = chain.FindHint(chunk);
                 for (ui32 i = 0; i < chain.SlotsInBatch; ++i) {
                     auto x = MakeIntrusive<TMemRegion>(chunk, i * chain.SlotSize, chain.SlotSize);
