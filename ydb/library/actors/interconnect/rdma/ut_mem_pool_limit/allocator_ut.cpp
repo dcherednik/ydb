@@ -195,7 +195,7 @@ TEST_F(TAllocatorSuite, AllocationWithReclaimTwoThreads) {
     };
 
     Cerr << "===" << Endl;
-/*
+
     for (size_t i = 0; i < 10; i++) {
         float s0 = 0.0;
         float s1 = 0.0;
@@ -232,14 +232,13 @@ TEST_F(TAllocatorSuite, AllocationWithReclaimTwoThreads) {
     }
     Cerr << "===" << Endl;
 
-*/
     for (size_t i = 0; i < 10; i++) {
         float s0 = 0.0;
         float s1 = 0.0;
         size_t numAlloc0 = 10000;
         size_t numAlloc1 = 10000;
         std::thread thread0(allocFn, 512, numAlloc0, std::ref(s0), true);
-        std::thread thread1(allocFn, 1024, numAlloc1, std::ref(s1), true);
+        std::thread thread1(allocFn, 512, numAlloc1, std::ref(s1), true);
 
         thread0.join();
         thread1.join();
@@ -250,7 +249,7 @@ TEST_F(TAllocatorSuite, AllocationWithReclaimTwoThreads) {
     }
 
     Cerr << "===" << Endl;
-/*
+
     for (size_t i = 0; i < 10; i++) {
         float s0 = 0.0;
         float s1 = 0.0;
@@ -266,5 +265,5 @@ TEST_F(TAllocatorSuite, AllocationWithReclaimTwoThreads) {
         s1 = s1 / float(numAlloc1);
         Cerr << "Average time per allocation t0: " << s0 << " us, t1: " << s1 << " us" << Endl;
     }
-*/
+
 }

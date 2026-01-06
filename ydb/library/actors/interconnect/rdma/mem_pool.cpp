@@ -120,38 +120,36 @@ namespace NInterconnect::NRdma {
         return ReclaimSemaphore.GetGeneration();
     }
 
-    void VerifySingleUsage() const noexcept {
-        ReclaimSemaphore.VerifySingleUsage();
+    size_t Size() const noexcept {
+        Y_ABORT_UNLESS(!MRs.empty());
+        return MRs[0]->length;
     }
 
     private:
         std::vector<ibv_mr*> MRs;
         IMemPool* MemPool;
         class TChunkUseLock {
-            std::atomic<ui64> Lock = 0;
-            static constexpr ui64 ReclamingBitMask = 1ul << 63;
+            // Prevent reclaming just after new chunk allocation
+            std::atomic<ui64> Lock = ReclaimingBitMask;
+            static constexpr ui64 ReclaimingBitMask = 1ul << 63;
             static constexpr size_t GenerationBits = 47u;
             static constexpr size_t UseCountBits = 16u;
             static constexpr ui64 UseCountMask = (1ul << UseCountBits) - 1u;
         public:
             void Release() noexcept {
-                //if ((Lock.load() & UseCountMask) <= 0) 
-                //    Cerr << "Release: " << (Lock.load() & UseCountMask) << Endl;
                 Y_ABORT_UNLESS((Lock.load() & UseCountMask) > 0);
                 Lock.fetch_sub(1);
             }
 
             bool TryAcquire(ui64 expectedGeneration) noexcept {
-                //Cerr << "TryAcquire: " << (Lock.load() & UseCountMask) << Endl;
                 ui64 x = Lock.fetch_add(1, std::memory_order_acq_rel);
-                //if (((x) >> UseCountBits) == expectedGeneration) {
-                if (((x & (~ReclamingBitMask)) >> UseCountBits) == expectedGeneration) {
-                    // Check we need to mark "reclaiming done"
-                    if (x & ReclamingBitMask) {
+                Y_ABORT_UNLESS((x & UseCountMask) < 65535);
+                if (((x & (~ReclaimingBitMask)) >> UseCountBits) == expectedGeneration) {
+                    // Check we need to unset reclaiming bit
+                    if (x & ReclaimingBitMask) {
                         Y_ABORT_UNLESS((x & UseCountMask) == 0);
-                        //Cerr << "Reclaim bit weas set" << Endl;
                         x += 1; // value already incremented in memory
-                        ui64 newX = x & (~ReclamingBitMask);
+                        ui64 newX = x & (~ReclaimingBitMask);
                         if (!Lock.compare_exchange_strong(x, newX,
                             std::memory_order_release, std::memory_order_relaxed)) {
                                 Y_ABORT_UNLESS(false, "ZZZZZ");
@@ -168,23 +166,20 @@ namespace NInterconnect::NRdma {
 
             bool TryReclaim() noexcept {
                 ui64 oldX = Lock.load(std::memory_order_relaxed);
-              //  Cerr << "use count " << (oldX & UseCountMask) << Endl; 
                 ui64 newX;
                 do {
                     // Check the chunk is currently not in progress of reclaim
-                    if (oldX & ReclamingBitMask) {
-                        //Cerr << "chunk in reclaim progress..." << Endl;
+                    if (oldX & ReclaimingBitMask) {
                         return false;
                     }
                     // Check use count
                     if ((oldX & UseCountMask) != 0) {
-                     //   Cerr << "ret false" << Endl;
                         return false;
                     }
-                    // Bump generation. We have 48 bits for generation. 
-                    // 1 << 48 is 281474976710656, which mean even if we have 1000000 reclamations per second
-                    // we need ((1 << 48) / 1000000 ) / 3600 / 24 / 365 = 8.9 yaar to rollower this counter
-                    newX = (((oldX >> UseCountBits) + 1u) << UseCountBits) | ReclamingBitMask;
+                    // Bump generation. We have 47 bits for generation. 
+                    // 1 << 47 is 140737488355328, which mean even if we have 1000000 reclaimations per second
+                    // we need ((1 << 47) / 1000000 ) / 3600 / 24 / 365 = 4.46 yaar to rollower this counter
+                    newX = (((oldX >> UseCountBits) + 1u) << UseCountBits) | ReclaimingBitMask;
                 } while (!Lock.compare_exchange_weak(oldX, newX,
                     std::memory_order_release, std::memory_order_relaxed));
 
@@ -192,18 +187,7 @@ namespace NInterconnect::NRdma {
             } 
             
             ui64 GetGeneration() const noexcept {
-                return (Lock.load(std::memory_order_relaxed) & ~ReclamingBitMask) >> UseCountBits; 
-            }
-
-            void VerifySingleUsage() const noexcept {
-                auto x = Lock.load();
-                if ((x & UseCountMask) != 0ull) {
-                    Cerr << x << Endl;
-                }
-                Y_ABORT_UNLESS((x & UseCountMask) == 0ull);
-                if (GetGeneration()) {
-                    Y_ABORT_UNLESS((x & ReclamingBitMask));
-                }
+                return (Lock.load(std::memory_order_relaxed) & ~ReclaimingBitMask) >> UseCountBits; 
             }
         } ReclaimSemaphore;
     };
@@ -449,12 +433,12 @@ namespace NInterconnect::NRdma {
             const std::lock_guard<std::mutex> lock(Mutex);
             Y_ABORT_UNLESS(AllocatedChunks <= MaxChunk);
 
+            size = AlignUp(size, Alignment);
+
             if (Y_UNLIKELY(AllocatedChunks == MaxChunk)) {
                 //return nullptr;
-                return TryReclaim();
+                return TryReclaim(size);
             }
-
-            size = AlignUp(size, Alignment);
 
             void* ptr = allocateMemory(size, Alignment, hp);
             if (!ptr) {
@@ -511,11 +495,9 @@ namespace NInterconnect::NRdma {
             }
         }
     private:
-        TChunkPtr TryReclaim() noexcept {
+        TChunkPtr TryReclaim(size_t size) noexcept {
             for (auto it = Chunks.Begin(); it!= Chunks.End(); it++) {
-                //Cerr << "RefCnt: "  << it->RefCount() << Endl;
-                if (it->TryReclaim()) {
-                  //  Cerr << "found someone: " << it->GetMr(0)->addr << Endl;
+                if (it->Size() == size && it->TryReclaim()) {
                     return &(*it);
                 }
             }
@@ -671,12 +653,16 @@ namespace NInterconnect::NRdma {
                 if (FullBatchesSlots.Dequeue(&res)) {
                     return res;
                 }
-                /*if (IncompleteBatchMutex.try_lock()) {
+                if (IncompleteBatchMutex.try_lock()) {
                     if (IncompleteBatch.size()) {
-                        Cerr << "HasImcompleted " << IncompleteBatch.size()  << Endl;
+                        res = std::move(IncompleteBatch);
+                        IncompleteBatch.clear();
                     }
                     IncompleteBatchMutex.unlock();
-                }*/
+                    if (res.size()) {
+                        return res;
+                    }
+                }
                 return std::nullopt;
             }
             void PutSlotsBatches(std::list<TIntrusivePtr<TMemRegion>>&& slots) {
@@ -736,11 +722,13 @@ namespace NInterconnect::NRdma {
                 if (!chunk) {
                     return false;
                 }
-                //chunk->VerifySingleUsage();
                 TChain::TMemRegcontainer::iterator it = chain.FindHint(chunk);
+                auto generation = chunk->GetGeneration(); 
                 for (ui32 i = 0; i < chain.SlotsInBatch; ++i) {
                     auto x = MakeIntrusive<TMemRegion>(chunk, i * chain.SlotSize, chain.SlotSize);
                     x->Generation = chunk->GetGeneration();
+                    //x->Generation = generation;
+                    Y_ABORT_UNLESS(generation == x->Generation);
                     it = chain.PutSlot(x, it);
                 }
                 return true;
@@ -780,7 +768,9 @@ namespace NInterconnect::NRdma {
 
             void Free(TMemRegion&& mr, TSlotMemPool& pool) noexcept {
                 //if (mr.Generation != mr.Chunk->GetGeneration()) {
-                //    return;
+                //
+                // 
+                //     return;
                 //}
                 ui32 chainIndex = GetChainIndex(mr.GetSize());
                 if (Stopped) {
