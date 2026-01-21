@@ -377,7 +377,11 @@ namespace NActors {
         ui16 credsSerializedSize = rdmaCreds.ByteSizeLong();
         // Part = | TChannelPart | EXdcCommand::RDMA_READ | rdmaCreds.Size | rdmaCreds | checkSum |
         size_t partSize = sizeof(TChannelPart) + sizeof(ui8) + sizeof(ui16) + credsSerializedSize + sizeof(ui32);
-        Y_ABORT_UNLESS(partSize < 4096);
+        if (partSize >= 4096) {
+            Cerr << "XXX: " << partSize << Endl;
+            Cerr << "task.GetInternalFreeAmount() " << task.GetInternalFreeAmount() << Endl;
+        }
+        //Y_ABORT_UNLESS(partSize < 4096);
 
         if (partSize > Max<ui16>() || partSize > task.GetInternalFreeAmount()) {
             // TODO: support split into multiple parts

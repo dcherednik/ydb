@@ -608,6 +608,65 @@ TEST_P(XdcRdmaTestCqMode, SendMixBig) {
     UNIT_ASSERT_VALUES_EQUAL(events.Checks.size(), 0u);
 }
 
+static void DoSendHugePayloadsNum(const ui32 numPayloads) {
+    const NInterconnect::NRdma::TMemPoolSettings settings {
+        .SizeLimitMb = 256
+    };
+    auto pool = NInterconnect::NRdma::CreateSlotMemPool(nullptr, settings);
+
+     TTestICCluster cluster(2, NActors::TChannelsConfig(), nullptr, nullptr, TTestICCluster::Flags::EMPTY,
+        TTestICCluster::TCheckerFactory(), TDuration::Minutes(9999)); //Disable dead peer detection to parallel activity
+
+    auto ev = new TEvTestSerialization();
+    ev->Record.SetBlobID(0);
+    ev->Record.SetBuffer(TStringBuilder{} << "hello world ");
+    const size_t payloadSz = 4096;
+    for (ui32 j = 0; j < numPayloads; ++j) {
+        auto buf = pool->AllocRcBuf(payloadSz, NInterconnect::NRdma::IMemPool::PAGE_ALIGNED).value();
+        ui32* p = reinterpret_cast<ui32*>(buf.GetDataMut()); 
+        std::fill(p, p + (payloadSz / sizeof(*p)), j);
+        ev->AddPayload(TRope(std::move(buf)));
+    }
+    UNIT_ASSERT(ev->AllowExternalDataChannel());
+
+
+    auto recieverPtr = new TReceiveActor([numPayloads, payloadSz](TEvTestSerialization::TPtr ev) {
+        ui64 blobId = ev->Get()->Record.GetBlobID();
+        Cerr << "blobId: " << blobId << Endl;
+        UNIT_ASSERT_VALUES_EQUAL(ev->Get()->GetPayloadCount(), numPayloads);
+        for (ui32 j = 0; j < numPayloads; ++j) {
+            TRope buf = ev->Get()->GetPayload(j);
+            auto span = buf.GetContiguousSpan();
+            //Cerr << "Span: " << span.GetSize() << Endl;
+            const ui32* p = reinterpret_cast<const ui32*>(span.GetData());
+            UNIT_ASSERT_VALUES_EQUAL(span.GetSize(), payloadSz);
+
+            while (p < reinterpret_cast<const ui32*>(span.GetData() + payloadSz)) {
+                UNIT_ASSERT_VALUES_EQUAL(*p, j);
+                p++;
+            } 
+        }
+    });
+    const TActorId receiver = cluster.RegisterActor(recieverPtr, 1);
+
+    Sleep(TDuration::MilliSeconds(1000));
+
+    {
+        auto senderPtr = new TSendActor(receiver, ev);
+        cluster.RegisterActor(senderPtr, 2);
+    }
+
+    UNIT_ASSERT(recieverPtr->WhaitForRecieve(1, 20));
+
+}
+
+TEST_F(XdcRdmaTest, Send250Payloads) {
+    DoSendHugePayloadsNum(250);
+}
+
+TEST_F(XdcRdmaTest, Send500Payloads) {
+    DoSendHugePayloadsNum(500);
+}
 
 INSTANTIATE_TEST_SUITE_P(
     XdcRdmaTest,
