@@ -608,7 +608,7 @@ TEST_P(XdcRdmaTestCqMode, SendMixBig) {
     UNIT_ASSERT_VALUES_EQUAL(events.Checks.size(), 0u);
 }
 
-static void DoSendHugePayloadsNum(const ui32 numPayloads) {
+static void DoSendHugePayloadsNum(const ui32 numPayloads, const size_t payloadSz) {
     const NInterconnect::NRdma::TMemPoolSettings settings {
         .SizeLimitMb = 256
     };
@@ -620,7 +620,6 @@ static void DoSendHugePayloadsNum(const ui32 numPayloads) {
     auto ev = new TEvTestSerialization();
     ev->Record.SetBlobID(0);
     ev->Record.SetBuffer(TStringBuilder{} << "hello world ");
-    const size_t payloadSz = 4096;
     for (ui32 j = 0; j < numPayloads; ++j) {
         auto buf = pool->AllocRcBuf(payloadSz, NInterconnect::NRdma::IMemPool::PAGE_ALIGNED).value();
         ui32* p = reinterpret_cast<ui32*>(buf.GetDataMut()); 
@@ -629,10 +628,7 @@ static void DoSendHugePayloadsNum(const ui32 numPayloads) {
     }
     UNIT_ASSERT(ev->AllowExternalDataChannel());
 
-
     auto recieverPtr = new TReceiveActor([numPayloads, payloadSz](TEvTestSerialization::TPtr ev) {
-        ui64 blobId = ev->Get()->Record.GetBlobID();
-        Cerr << "blobId: " << blobId << Endl;
         UNIT_ASSERT_VALUES_EQUAL(ev->Get()->GetPayloadCount(), numPayloads);
         for (ui32 j = 0; j < numPayloads; ++j) {
             TRope buf = ev->Get()->GetPayload(j);
@@ -644,12 +640,12 @@ static void DoSendHugePayloadsNum(const ui32 numPayloads) {
             while (p < reinterpret_cast<const ui32*>(span.GetData() + payloadSz)) {
                 UNIT_ASSERT_VALUES_EQUAL(*p, j);
                 p++;
-            } 
+            }
         }
     });
     const TActorId receiver = cluster.RegisterActor(recieverPtr, 1);
 
-    Sleep(TDuration::MilliSeconds(1000));
+    Sleep(TDuration::MilliSeconds(100));
 
     {
         auto senderPtr = new TSendActor(receiver, ev);
@@ -657,15 +653,33 @@ static void DoSendHugePayloadsNum(const ui32 numPayloads) {
     }
 
     UNIT_ASSERT(recieverPtr->WhaitForRecieve(1, 20));
+}
 
+TEST_F(XdcRdmaTest, Send1Payload) {
+    DoSendHugePayloadsNum(1, 8192);
+}
+
+TEST_F(XdcRdmaTest, Send2Payloads) {
+    DoSendHugePayloadsNum(2, 8192);
 }
 
 TEST_F(XdcRdmaTest, Send250Payloads) {
-    DoSendHugePayloadsNum(250);
+    DoSendHugePayloadsNum(250, 512);
 }
 
 TEST_F(XdcRdmaTest, Send500Payloads) {
-    DoSendHugePayloadsNum(500);
+    DoSendHugePayloadsNum(500, 512);
+}
+
+TEST_F(XdcRdmaTest, Send5000Payloads) {
+    DoSendHugePayloadsNum(5000, 512);
+}
+
+
+TEST_F(XdcRdmaTest, SendXPayloads) {
+    for (size_t i = 640; i < 650; i++) {
+        DoSendHugePayloadsNum(i, 512);
+    }
 }
 
 INSTANTIATE_TEST_SUITE_P(

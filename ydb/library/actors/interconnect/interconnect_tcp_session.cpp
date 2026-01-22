@@ -523,6 +523,7 @@ namespace NActors {
         // It reduces rdma memory usage and latency but in theory may also decrease effecincy of regular tcp channel in case of mixed RDMA + TCP traffic
         // TODO (dcherednik): recheck impact on the huge clusters
         const ui64 rdmaBytesToProduce = RdmaInflightDataAmount; 
+        //Cerr << "ProducePackets: " << NumEventsInQueue << " " << InflightDataAmount << " " << RdmaInflightDataAmount << " " <<  GetUnsentSize() << " " << GetTotalInflightAmountOfData() << Endl;
         while (NumEventsInQueue &&  (InflightDataAmount + RdmaInflightDataAmount) < GetTotalInflightAmountOfData() && GetUnsentSize() < GetUnsentLimit()) {
             if ((bytesProduced && TimeLimit->CheckExceeded()) || bytesProduced >= maxBytesToProduce || RdmaInflightDataAmount > rdmaBytesToProduce) {
                 break;
@@ -902,6 +903,7 @@ namespace NActors {
     }
 
     ui32 TInterconnectSessionTCP::MakePacket(bool data, TMaybe<ui64> pingMask) {
+        //Cerr << "MakePacket:  " << data << Endl;
         NInterconnect::TOutgoingStream& stream = data ? OutgoingStream : OutOfBandStream;
 
 #ifndef NDEBUG
@@ -1052,6 +1054,7 @@ namespace NActors {
         ui32 bytesGenerated = 0;
 
         Y_ABORT_UNLESS(NumEventsInQueue);
+        Cerr << "NumEventsInQueue: " << NumEventsInQueue << Endl;
         while (NumEventsInQueue) {
             TEventOutputChannel *channel = ChannelScheduler->PickChannelWithLeastConsumedWeight();
             Y_DEBUG_ABORT_UNLESS(!channel->IsEmpty());
@@ -1089,6 +1092,7 @@ namespace NActors {
                 }
             }
 
+            Cerr << "GROSS: " << gross << "eventDone: " << eventDone <<  Endl;
             if (!gross) { // no progress -- almost full packet buffer
                 break;
             }

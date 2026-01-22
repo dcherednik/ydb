@@ -153,8 +153,13 @@ namespace NActors {
         struct TRdmaSerializationArtifacts {
             NActorsInterconnect::TRdmaCreds RdmaCreds;
             ui32 CheckSum = 0;
+            // Variable is used to split creds if the serialized size is grather than one IC packet
+            ui32 PartCredPos = 0;
+            float CredsPerByteAvg = 1.0 / RdmaCredsMinSizeSerialized;
+
         };
         std::optional<TRdmaSerializationArtifacts> SendViaRdma;
+        const static ui32 RdmaCredsMinSizeSerialized;
 
         template<bool External>
         bool SerializeEvent(TTcpPacketOutTask& task, TEventHolder& event, size_t *bytesSerialized);
