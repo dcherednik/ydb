@@ -393,14 +393,13 @@ namespace NActors {
         // Part = | TChannelPart | EXdcCommand::RDMA_READ (ui8)| rdmaCreds.Size (ui16) | seialized rdmaCreds | checkSum (ui32) |
         const size_t fixedPartSize = sizeof(TChannelPart) + sizeof(ui8) + sizeof(ui16) + sizeof(ui32);
         const ui32 minThreshold = fixedPartSize + RdmaCredsMinSizeSerialized;
-        Cerr << "FeedRdmaPayload, task: " << (void*)&task << " " << task.GetInternalFreeAmount() << " || " << RdmaCredsMinSizeSerialized << " " << fixedPartSize<< Endl;
         // No free amount even for one rdma cred - we need new packet
         if (task.GetInternalFreeAmount() < minThreshold) {
             return std::nullopt;
         }
 
         auto calcPartCredLen = [] (size_t freeAmount, float credsPerByteAvg) -> size_t {
-            return (freeAmount - fixedPartSize) * credsPerByteAvg - 0.1;
+            return (freeAmount - fixedPartSize) * credsPerByteAvg;
         };
 
         Y_ABORT_UNLESS(rdmaDeviceIndex >= 0);
@@ -438,11 +437,9 @@ namespace NActors {
                 }
                 Cerr << "COPY DONE: " << tmpCreds.CredsSize() << " ret: " << lastPart << Endl; 
                 rdmaCreds = &tmpCreds;
-
             }
 
             credsSerializedSize = rdmaCreds->ByteSizeLong();
-            // Part = | TChannelPart | EXdcCommand::RDMA_READ| rdmaCreds.Size | rdmaCreds | checkSum |
 
             partSize = fixedPartSize + credsSerializedSize;
             Cerr << "task.GetInternalFreeAmount() " << task.GetInternalFreeAmount() << "  "  << credsSerializedSize << Endl;
@@ -453,7 +450,7 @@ namespace NActors {
             //Y_ABORT_UNLESS(partSize < 4096);
 
             if (partSize > task.GetInternalFreeAmount()) {
-                SendViaRdma->CredsPerByteAvg = rdmaCreds->CredsSize() / (float)credsSerializedSize; 
+                SendViaRdma->CredsPerByteAvg = rdmaCreds->CredsSize() / (double)credsSerializedSize; 
                 size_t newLen = calcPartCredLen(task.GetInternalFreeAmount(), SendViaRdma->CredsPerByteAvg);
                 Cerr << "newLen: " << newLen << " avg: " << SendViaRdma->CredsPerByteAvg <<  Endl;
 
@@ -465,10 +462,8 @@ namespace NActors {
                 }
 
                 if (!curPartCredLen) {
-                    //no more space
                     return std::nullopt;
                 }
-                // we have to gurantee progress
             } else {
                 // Shift start position for the next packet
                 SendViaRdma->PartCredPos += curPartCredLen; 
@@ -504,7 +499,6 @@ namespace NActors {
 
         task.AttachRdmaPayloadSize(payloadSz);
 
-        Cerr << "return: " << lastPart << Endl;
         return lastPart;
     }
 
