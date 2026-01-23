@@ -307,8 +307,8 @@ namespace NActors {
             if (IsPartInline) {
                 complete = FeedInlinePayload(task, event);
             } else if (SendViaRdma) {
-                complete = FeedRdmaPayload(task, event, rdmaDeviceIndex);
-                //Cerr << "FeedRdmaPayload ret: " << (complete ? ((int)(*complete)) : -1) << Endl;
+                Y_ABORT_UNLESS(rdmaDeviceIndex >= 0);
+                complete = FeedRdmaPayload(task, event);
             } else {
                 complete = FeedExternalPayload(task, event);
             }
@@ -388,7 +388,7 @@ namespace NActors {
         return true;
     }
 
-    std::optional<bool> TEventOutputChannel::FeedRdmaPayload(TTcpPacketOutTask& task, TEventHolder& event, ssize_t rdmaDeviceIndex) {
+    std::optional<bool> TEventOutputChannel::FeedRdmaPayload(TTcpPacketOutTask& task, TEventHolder& event) {
         // The part layout is:
         // Part = | TChannelPart | EXdcCommand::RDMA_READ (ui8)| rdmaCreds.Size (ui16) | seialized rdmaCreds | checkSum (ui32) |
         const size_t fixedPartSize = sizeof(TChannelPart) + sizeof(ui8) + sizeof(ui16) + sizeof(ui32);
@@ -402,7 +402,6 @@ namespace NActors {
             return (freeAmount - fixedPartSize) * credsPerByteAvg;
         };
 
-        Y_ABORT_UNLESS(rdmaDeviceIndex >= 0);
         const NActorsInterconnect::TRdmaCreds* rdmaCreds = &SendViaRdma->RdmaCreds;
 
         NActorsInterconnect::TRdmaCreds tmpCreds; 
@@ -413,7 +412,7 @@ namespace NActors {
         size_t partSize;
         size_t credsSerializedSize;
         for (;;) {
-            if (curPartCredLen || SendViaRdma->PartCredPos) {
+            if (Y_UNLIKELY(curPartCredLen || SendViaRdma->PartCredPos)) {
                 // First iteration for non first part
                 if (!curPartCredLen) {
                     curPartCredLen = calcPartCredLen(task.GetInternalFreeAmount(), SendViaRdma->CredsPerByteAvg);
@@ -430,6 +429,7 @@ namespace NActors {
                     lastPart = false;
                 }
 
+                //TODO: Find the way to perform partial serialzation of repeated field
                 tmpCreds.Clear();
                 Cerr << "Start copy: " << curPartCredLen << " from " << SendViaRdma->PartCredPos << " " << lastPart << Endl; 
                 for (size_t i = 0, j = SendViaRdma->PartCredPos; i < curPartCredLen; i++, j++) {
@@ -449,7 +449,7 @@ namespace NActors {
 //            }
             //Y_ABORT_UNLESS(partSize < 4096);
 
-            if (partSize > task.GetInternalFreeAmount()) {
+            if (Y_UNLIKELY(partSize > task.GetInternalFreeAmount())) {
                 SendViaRdma->CredsPerByteAvg = rdmaCreds->CredsSize() / (double)credsSerializedSize; 
                 size_t newLen = calcPartCredLen(task.GetInternalFreeAmount(), SendViaRdma->CredsPerByteAvg);
                 Cerr << "newLen: " << newLen << " avg: " << SendViaRdma->CredsPerByteAvg <<  Endl;
@@ -465,6 +465,11 @@ namespace NActors {
                     return std::nullopt;
                 }
             } else {
+                // Report to mon if it is first part of multipart rdma events
+                // huge number of multipart events may be a reason of some additional latency
+                if (Y_UNLIKELY(SendViaRdma->PartCredPos == 0 && curPartCredLen != 0)) {
+                    Metrics->IncRdmaMultipartEvents();
+                }
                 // Shift start position for the next packet
                 SendViaRdma->PartCredPos += curPartCredLen; 
                 break;

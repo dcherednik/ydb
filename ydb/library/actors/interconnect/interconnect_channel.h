@@ -168,7 +168,7 @@ namespace NActors {
         bool FeedPayload(TTcpPacketOutTask& task, TEventHolder& event, ssize_t rdmaDeviceIndex);
         std::optional<bool> FeedInlinePayload(TTcpPacketOutTask& task, TEventHolder& event);
         std::optional<bool> FeedExternalPayload(TTcpPacketOutTask& task, TEventHolder& event);
-        std::optional<bool> FeedRdmaPayload(TTcpPacketOutTask& task, TEventHolder& event, ssize_t rdmaDeviceIndex);
+        std::optional<bool> FeedRdmaPayload(TTcpPacketOutTask& task, TEventHolder& event);
 
         bool FeedDescriptor(TTcpPacketOutTask& task, TEventHolder& event);
 
