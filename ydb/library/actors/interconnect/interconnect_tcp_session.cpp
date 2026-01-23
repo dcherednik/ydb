@@ -1054,7 +1054,6 @@ namespace NActors {
         ui32 bytesGenerated = 0;
 
         Y_ABORT_UNLESS(NumEventsInQueue);
-        Cerr << "NumEventsInQueue: " << NumEventsInQueue << Endl;
         while (NumEventsInQueue) {
             TEventOutputChannel *channel = ChannelScheduler->PickChannelWithLeastConsumedWeight();
             Y_DEBUG_ABORT_UNLESS(!channel->IsEmpty());
@@ -1092,7 +1091,6 @@ namespace NActors {
                 }
             }
 
-            Cerr << "GROSS: " << gross << "eventDone: " << eventDone <<  Endl;
             if (!gross) { // no progress -- almost full packet buffer
                 break;
             }

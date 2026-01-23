@@ -405,18 +405,25 @@ namespace NActors {
         const NActorsInterconnect::TRdmaCreds* rdmaCreds = &SendViaRdma->RdmaCreds;
 
         NActorsInterconnect::TRdmaCreds tmpCreds; 
+
         bool lastPart = true;
 
-        size_t curPartCredLen = 0;
-        
         size_t partSize;
         size_t credsSerializedSize;
+
+        size_t curPartCredLen = 0;
+        /*
+         * Split rdma creds in to multiple parts if serialized credential data doesn't fit in to one IC packets.
+         * Prerequisites:
+         * - We assume this situation should be quite rare, so do not perform any additional copy in happy path
+         * - If we need to split (and credential copy to perform serialization of its part) we want to reduce number of itterations
+         * - There is no guarantee to get task with well known ammount of free space
+         */
         for (;;) {
             if (Y_UNLIKELY(curPartCredLen || SendViaRdma->PartCredPos)) {
                 // First iteration for non first part
                 if (!curPartCredLen) {
                     curPartCredLen = calcPartCredLen(task.GetInternalFreeAmount(), SendViaRdma->CredsPerByteAvg);
-                    Cerr << "new newPartCredLen: " << curPartCredLen << " avg: " << SendViaRdma->CredsPerByteAvg <<  Endl;
                     if (!curPartCredLen) {
                         return std::nullopt;
                     }
@@ -431,30 +438,21 @@ namespace NActors {
 
                 //TODO: Find the way to perform partial serialzation of repeated field
                 tmpCreds.Clear();
-                Cerr << "Start copy: " << curPartCredLen << " from " << SendViaRdma->PartCredPos << " " << lastPart << Endl; 
                 for (size_t i = 0, j = SendViaRdma->PartCredPos; i < curPartCredLen; i++, j++) {
                     tmpCreds.AddCreds()->CopyFrom(SendViaRdma->RdmaCreds.GetCreds(j));
                 }
-                Cerr << "COPY DONE: " << tmpCreds.CredsSize() << " ret: " << lastPart << Endl; 
                 rdmaCreds = &tmpCreds;
             }
 
             credsSerializedSize = rdmaCreds->ByteSizeLong();
 
             partSize = fixedPartSize + credsSerializedSize;
-            Cerr << "task.GetInternalFreeAmount() " << task.GetInternalFreeAmount() << "  "  << credsSerializedSize << Endl;
-            //if (partSize >= 4096) {
-
-                //Cerr << "XXX: " << partSize << " " << credsSerializedSize << "\n" << rdmaCreds->DebugString() << Endl;
-//            }
-            //Y_ABORT_UNLESS(partSize < 4096);
 
             if (Y_UNLIKELY(partSize > task.GetInternalFreeAmount())) {
                 SendViaRdma->CredsPerByteAvg = rdmaCreds->CredsSize() / (double)credsSerializedSize; 
                 size_t newLen = calcPartCredLen(task.GetInternalFreeAmount(), SendViaRdma->CredsPerByteAvg);
-                Cerr << "newLen: " << newLen << " avg: " << SendViaRdma->CredsPerByteAvg <<  Endl;
 
-                // Guarantee progress 
+                // Guarantee progress even in case of huge error of average calculation
                 if (newLen >= curPartCredLen) {
                     curPartCredLen--;
                 } else {
@@ -475,8 +473,6 @@ namespace NActors {
                 break;
             }
         }
-
-        Cerr << "send part: sz: " << partSize << " len: " << rdmaCreds->CredsSize() << "pos for next: " << SendViaRdma->PartCredPos << " len: " <<  curPartCredLen << Endl; 
 
         const ui32 checkSum = SendViaRdma->CheckSum;
         char buffer[partSize];
@@ -579,5 +575,4 @@ namespace NActors {
         }
         pool.Release(Queue);
     }
-
 }
