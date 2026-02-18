@@ -216,6 +216,7 @@ namespace NActors {
         , RdmaQp(std::move(qp))
         , RdmaCq(std::move(cq))
         , ConfirmedByInput(lastConfirmed)
+        , LastConfirmedByInputSentToSession(lastConfirmed)
         , Metrics(std::move(metrics))
         , DeadPeerTimeout(deadPeerTimeout)
     {
@@ -402,22 +403,34 @@ namespace NActors {
         auto it = std::min_element(PingQ.begin(), PingQ.end());
         const TDuration ping = it != PingQ.end() ? *it : TDuration::Zero();
 
-        // send update to main session actor if something valuable has changed
-        if (!UpdateFromInputSession) {
+        const bool updateDelta = HasInputSessionUpdateDelta(ConfirmedByInput, LastConfirmedByInputSentToSession,
+            numDataBytes, UpdateFromInputSession.Get());
+        const bool dataDelta = numDataBytes > 0;
+
+        // send update to main session actor only when Confirm/Data state has changed
+        if (!UpdateFromInputSession && updateDelta) {
             UpdateFromInputSession = MakeHolder<TEvUpdateFromInputSession>(ConfirmedByInput, numDataBytes, ping);
-        } else {
+        } else if (UpdateFromInputSession) {
             Y_ABORT_UNLESS(ConfirmedByInput >= UpdateFromInputSession->ConfirmedByInput);
             UpdateFromInputSession->ConfirmedByInput = ConfirmedByInput;
-            UpdateFromInputSession->NumDataBytes += numDataBytes;
+            if (dataDelta) {
+                UpdateFromInputSession->NumDataBytes += numDataBytes;
+            }
             UpdateFromInputSession->Ping = Min(UpdateFromInputSession->Ping, ping);
         }
 
-        if (Context->UpdateInFlight || Context->NextUpdatePending) {
-            Context->NextUpdatePending = true;
-            Y_ABORT_UNLESS(UpdateFromInputSession);
+        if (updateDelta) {
+            if (Context->UpdateInFlight || Context->NextUpdatePending) {
+                Context->NextUpdatePending = true;
+                Y_ABORT_UNLESS(UpdateFromInputSession);
+            } else {
+                Context->UpdateInFlight = true;
+                LastConfirmedByInputSentToSession = UpdateFromInputSession->ConfirmedByInput;
+                ++UpdatesSentToSession;
+                Send(SessionId, UpdateFromInputSession.Release());
+            }
         } else {
-            Context->UpdateInFlight = true;
-            Send(SessionId, UpdateFromInputSession.Release());
+            ++UpdatesSkippedNoDelta;
         }
 
         for (size_t channel = 0; channel < InputTrafficArray.size(); ++channel) {
@@ -947,6 +960,8 @@ namespace NActors {
         Y_ABORT_UNLESS(Context->NextUpdatePending);
         Context->UpdateInFlight = true;
         Context->NextUpdatePending = false;
+        LastConfirmedByInputSentToSession = UpdateFromInputSession->ConfirmedByInput;
+        ++UpdatesSentToSession;
         Send(SessionId, UpdateFromInputSession.Release());
     }
 
@@ -1358,6 +1373,8 @@ namespace NActors {
                             MON_VAR(XdcSections)
                             MON_VAR(XdcRefs)
                             MON_VAR(CpuStarvationEvents)
+                            MON_VAR(UpdatesSentToSession)
+                            MON_VAR(UpdatesSkippedNoDelta)
 
                             MON_VAR(PayloadSize)
                             MON_VAR(InboundPacketQ.size())

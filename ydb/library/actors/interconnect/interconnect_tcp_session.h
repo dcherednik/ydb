@@ -108,6 +108,14 @@ namespace NActors {
         CONFIRMING,           // confirmation inflight
     };
 
+    inline bool HasInputSessionUpdateDelta(ui64 confirmedByInput, ui64 lastConfirmedByInputSentToSession,
+            ui64 numDataBytes, const TEvUpdateFromInputSession* updateFromInputSession) {
+        const bool confirmDelta = updateFromInputSession
+            ? confirmedByInput > updateFromInputSession->ConfirmedByInput
+            : confirmedByInput > lastConfirmedByInputSentToSession;
+        return confirmDelta || numDataBytes > 0;
+    }
+
     struct TRdmaReadContext : public TAtomicRefCount<TRdmaReadContext> {
         using TPtr = TIntrusivePtr<TRdmaReadContext>;
         TRdmaReadContext(std::shared_ptr<NInterconnect::NRdma::TQueuePair> qp)
@@ -320,6 +328,7 @@ namespace NActors {
         THolder<TEvUpdateFromInputSession> UpdateFromInputSession;
 
         ui64 ConfirmedByInput;
+        ui64 LastConfirmedByInputSentToSession;
 
         std::shared_ptr<IInterconnectMetrics> Metrics;
         std::array<ui32, 16> InputTrafficArray;
@@ -399,6 +408,8 @@ namespace NActors {
         ui64 XdcRefs = 0;
 
         ui64 CpuStarvationEvents = 0;
+        ui64 UpdatesSentToSession = 0;
+        ui64 UpdatesSkippedNoDelta = 0;
 
         void GenerateHttpInfo(NMon::TEvHttpInfoRes::TPtr ev);
     };

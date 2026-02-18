@@ -3,6 +3,7 @@
 #include <library/cpp/testing/unittest/registar.h>
 #include <library/cpp/digest/md5/md5.h>
 #include <util/random/fast.h>
+#include <util/string/cast.h>
 #include <util/string/vector.h>
 
 using namespace NActors;
@@ -146,6 +147,33 @@ private:
     std::atomic<size_t> Recieved;
 };
 
+class TOneWayRecipientActor : public TActor<TOneWayRecipientActor> {
+public:
+    TOneWayRecipientActor()
+        : TActor(&TThis::StateFunc)
+    {}
+
+    void HandlePing(TAutoPtr<IEventHandle>&) {
+        Received.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    size_t GetReceived() const noexcept {
+        return Received.load(std::memory_order_relaxed);
+    }
+
+    STRICT_STFUNC(StateFunc,
+        fFunc(TEvents::THelloWorld::Ping, HandlePing);
+    )
+
+private:
+    std::atomic<size_t> Received = 0;
+};
+
+ui64 GetInputSessionCounter(TTestICCluster& cluster, ui32 me, ui32 peer, TStringBuf name) {
+    const TString value = ExtractPattern(cluster, me, peer, TStringBuilder() << "<tr><td>" << name << "</td><td>", "<");
+    return FromString<ui64>(value);
+}
+
 Y_UNIT_TEST_SUITE(Interconnect) {
 
     Y_UNIT_TEST(SessionContinuation) {
@@ -213,5 +241,62 @@ Y_UNIT_TEST_SUITE(Interconnect) {
             auto s = GetRdmaChecksumStatus(cluster, 2, 1);
             UNIT_ASSERT_VALUES_EQUAL(s, "On | SoftwareChecksum");
         }
+    }
+
+    Y_UNIT_TEST(InputSessionSkipsNoDeltaUpdatesOnIdlePingTraffic) {
+        TTestICCluster cluster(2, TChannelsConfig(), nullptr, nullptr, TTestICCluster::EMPTY, TDuration::Seconds(15),
+            TNode::DefaultInflight(), TDuration::MilliSeconds(100));
+
+        constexpr size_t numMessages = 2000;
+        auto* receiver = new TOneWayRecipientActor;
+        const TActorId recipient = cluster.RegisterActor(receiver, 2);
+
+        for (size_t i = 0; i < numMessages; ++i) {
+            const bool success = cluster.GetNode(1)->Send(recipient, new TEvents::TEvPing());
+            UNIT_ASSERT(success);
+        }
+
+        for (ui32 i = 0; i < 400 && receiver->GetReceived() < numMessages; ++i) {
+            Sleep(TDuration::MilliSeconds(50));
+        }
+        UNIT_ASSERT_VALUES_EQUAL(receiver->GetReceived(), numMessages);
+
+        for (ui32 i = 0; i < 40; ++i) {
+            Sleep(TDuration::MilliSeconds(50));
+        }
+
+        const ui64 sentBefore = GetInputSessionCounter(cluster, 2, 1, "UpdatesSentToSession");
+        const ui64 skippedBefore = GetInputSessionCounter(cluster, 2, 1, "UpdatesSkippedNoDelta");
+        const ui64 packetsBefore = GetInputSessionCounter(cluster, 2, 1, "PacketsReadFromSocket");
+
+        UNIT_ASSERT(sentBefore > 0);
+
+        Sleep(TDuration::Seconds(2));
+
+        const ui64 sentAfter = GetInputSessionCounter(cluster, 2, 1, "UpdatesSentToSession");
+        const ui64 skippedAfter = GetInputSessionCounter(cluster, 2, 1, "UpdatesSkippedNoDelta");
+        const ui64 packetsAfter = GetInputSessionCounter(cluster, 2, 1, "PacketsReadFromSocket");
+
+        Cerr << "packetsAfter=" << packetsAfter
+             << " packetsBefore=" << packetsBefore
+             << " sentAfter=" << sentAfter
+             << " sentBefore=" << sentBefore
+             << " skippedAfter=" << skippedAfter
+             << " skippedBefore=" << skippedBefore
+             << Endl;
+
+        const ui64 packetsDelta = packetsAfter - packetsBefore;
+        const ui64 sentDelta = sentAfter - sentBefore;
+        const ui64 skippedDelta = skippedAfter - skippedBefore;
+        Cerr << "idleDelta packets=" << packetsDelta
+             << " sent=" << sentDelta
+             << " skipped=" << skippedDelta
+             << Endl;
+
+        UNIT_ASSERT(packetsAfter > packetsBefore);
+        UNIT_ASSERT_VALUES_EQUAL(sentAfter, sentBefore);
+        UNIT_ASSERT(skippedAfter > skippedBefore);
+        UNIT_ASSERT_C(skippedDelta >= 5,
+            TStringBuilder() << "expected more skipped updates on idle control traffic, got " << skippedDelta);
     }
 }

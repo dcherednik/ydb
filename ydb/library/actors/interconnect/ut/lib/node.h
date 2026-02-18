@@ -31,7 +31,8 @@ public:
           TIntrusivePtr<NLog::TSettings> loggerSettings = nullptr, ui32 inflight = DefaultInflight(),
           ESocketSendOptimization sendOpt = ESocketSendOptimization::DISABLED,
           bool withTls = false,
-          NInterconnect::NRdma::ECqMode rdmaCqMode = NInterconnect::NRdma::ECqMode::EVENT) {
+          NInterconnect::NRdma::ECqMode rdmaCqMode = NInterconnect::NRdma::ECqMode::EVENT,
+          TDuration pingPeriod = TDuration::Seconds(3)) {
         TActorSystemSetup setup;
         setup.NodeId = nodeId;
         setup.ExecutorsCount = 2;
@@ -54,6 +55,7 @@ public:
         common->Settings.SendBufferDieLimitInMB = 512;
         common->Settings.TotalInflightAmountOfData = inflight;
         common->Settings.TCPSocketBufferSize = 2048 * 1024;
+        common->Settings.PingPeriod = pingPeriod;
         common->Settings.SocketSendOptimization = sendOpt;
         common->OutgoingHandshakeInflightLimit = 3;
 
