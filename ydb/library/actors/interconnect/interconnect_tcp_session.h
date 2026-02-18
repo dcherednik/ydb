@@ -108,6 +108,9 @@ namespace NActors {
         CONFIRMING,           // confirmation inflight
     };
 
+    // UpdateFromInputSession is expensive because it wakes the output session and may trigger packet generation.
+    // We only send it when Confirm/Data state has changed; pure control traffic (e.g. ping-only packets) should not
+    // produce extra updates.
     inline bool HasInputSessionUpdateDelta(ui64 confirmedByInput, ui64 lastConfirmedByInputSentToSession,
             ui64 numDataBytes, const TEvUpdateFromInputSession* updateFromInputSession) {
         const bool confirmDelta = updateFromInputSession
@@ -346,6 +349,7 @@ namespace NActors {
         void Handle(TEvPollerReady::TPtr ev);
         void Handle(TEvPollerRegisterResult::TPtr ev);
         void HandleConfirmUpdate();
+        void SendUpdateToSession();
         void Handle(NInterconnect::NRdma::TEvRdmaReadDone::TPtr& ev);
         void ReceiveData();
         void ProcessHeader();

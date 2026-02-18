@@ -403,34 +403,31 @@ namespace NActors {
         auto it = std::min_element(PingQ.begin(), PingQ.end());
         const TDuration ping = it != PingQ.end() ? *it : TDuration::Zero();
 
+        // Keep a single pending update object and emit it only when Confirm/Data changed.
+        // This is the core optimization: idle control traffic still arrives, but no-delta updates are skipped,
+        // so output session does not get unnecessary wakeups.
         const bool updateDelta = HasInputSessionUpdateDelta(ConfirmedByInput, LastConfirmedByInputSentToSession,
             numDataBytes, UpdateFromInputSession.Get());
-        const bool dataDelta = numDataBytes > 0;
 
-        // send update to main session actor only when Confirm/Data state has changed
-        if (!UpdateFromInputSession && updateDelta) {
+        if (updateDelta && !UpdateFromInputSession) {
             UpdateFromInputSession = MakeHolder<TEvUpdateFromInputSession>(ConfirmedByInput, numDataBytes, ping);
-        } else if (UpdateFromInputSession) {
+        }
+
+        if (UpdateFromInputSession) {
             Y_ABORT_UNLESS(ConfirmedByInput >= UpdateFromInputSession->ConfirmedByInput);
             UpdateFromInputSession->ConfirmedByInput = ConfirmedByInput;
-            if (dataDelta) {
-                UpdateFromInputSession->NumDataBytes += numDataBytes;
-            }
+            UpdateFromInputSession->NumDataBytes += numDataBytes;
             UpdateFromInputSession->Ping = Min(UpdateFromInputSession->Ping, ping);
         }
 
-        if (updateDelta) {
-            if (Context->UpdateInFlight || Context->NextUpdatePending) {
-                Context->NextUpdatePending = true;
-                Y_ABORT_UNLESS(UpdateFromInputSession);
-            } else {
-                Context->UpdateInFlight = true;
-                LastConfirmedByInputSentToSession = UpdateFromInputSession->ConfirmedByInput;
-                ++UpdatesSentToSession;
-                Send(SessionId, UpdateFromInputSession.Release());
-            }
-        } else {
+        if (!updateDelta) {
             ++UpdatesSkippedNoDelta;
+        } else if (Context->UpdateInFlight || Context->NextUpdatePending) {
+            Context->NextUpdatePending = true;
+            Y_ABORT_UNLESS(UpdateFromInputSession);
+        } else {
+            Context->UpdateInFlight = true;
+            SendUpdateToSession();
         }
 
         for (size_t channel = 0; channel < InputTrafficArray.size(); ++channel) {
@@ -954,15 +951,20 @@ namespace NActors {
         }
     }
 
+    void TInputSessionTCP::SendUpdateToSession() {
+        Y_ABORT_UNLESS(UpdateFromInputSession);
+        LastConfirmedByInputSentToSession = UpdateFromInputSession->ConfirmedByInput;
+        ++UpdatesSentToSession;
+        Send(SessionId, UpdateFromInputSession.Release());
+    }
+
     void TInputSessionTCP::HandleConfirmUpdate() {
         Y_ABORT_UNLESS(UpdateFromInputSession);
         Y_ABORT_UNLESS(!Context->UpdateInFlight);
         Y_ABORT_UNLESS(Context->NextUpdatePending);
         Context->UpdateInFlight = true;
         Context->NextUpdatePending = false;
-        LastConfirmedByInputSentToSession = UpdateFromInputSession->ConfirmedByInput;
-        ++UpdatesSentToSession;
-        Send(SessionId, UpdateFromInputSession.Release());
+        SendUpdateToSession();
     }
 
     ssize_t TInputSessionTCP::Read(NInterconnect::TStreamSocket& socket, const TPollerToken::TPtr& token,
