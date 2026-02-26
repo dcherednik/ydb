@@ -31,7 +31,9 @@ public:
           TIntrusivePtr<NLog::TSettings> loggerSettings = nullptr, ui32 inflight = DefaultInflight(),
           ESocketSendOptimization sendOpt = ESocketSendOptimization::DISABLED,
           bool withTls = false, std::function<IActor*(ui32)> checkerFactory = {},
-          NInterconnect::NRdma::ECqMode rdmaCqMode = NInterconnect::NRdma::ECqMode::EVENT) {
+          NInterconnect::NRdma::ECqMode rdmaCqMode = NInterconnect::NRdma::ECqMode::EVENT,
+          bool withRdma = true,
+          std::function<void(ui32, TInterconnectSettings&)> settingsCustomizer = {}) {
         TActorSystemSetup setup;
         setup.NodeId = nodeId;
         setup.ExecutorsCount = 2;
@@ -56,9 +58,14 @@ public:
         common->Settings.TCPSocketBufferSize = 2048 * 1024;
         common->Settings.SocketSendOptimization = sendOpt;
         common->OutgoingHandshakeInflightLimit = 3;
+        if (settingsCustomizer) {
+            settingsCustomizer(nodeId, common->Settings);
+        }
 
         #if !defined(_msan_enabled_)
-        common->RdmaMemPool = NInterconnect::NRdma::CreateSlotMemPool(nullptr, {});
+        if (withRdma) {
+            common->RdmaMemPool = NInterconnect::NRdma::CreateSlotMemPool(nullptr, {});
+        }
         #endif
 
         if (withTls) {

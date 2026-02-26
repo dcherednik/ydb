@@ -59,6 +59,12 @@ namespace NActors {
         ui32 PreallocatedBufferSize = 8 << 10; // 8 KB
         ui32 NumPreallocatedBuffers = 16;
         bool EnableExternalDataChannel = true;
+        bool EnableKernelLiveness = false;
+        TDuration KernelKeepAliveIdle = TDuration::Seconds(5);
+        TDuration KernelKeepAliveInterval = TDuration::Seconds(1);
+        ui32 KernelKeepAliveProbes = 5;
+        TDuration KernelUserTimeout = TDuration::Seconds(10);
+        bool DisableUserSpacePingWhenKernelLivenessEnabled = true;
         bool ValidateIncomingPeerViaDirectLookup = false;
         ui32 SocketBacklogSize = 0; // SOMAXCONN if zero
         TDuration FirstErrorSleep = TDuration::MilliSeconds(10);

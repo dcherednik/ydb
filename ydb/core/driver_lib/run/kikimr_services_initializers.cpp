@@ -498,6 +498,21 @@ static TInterconnectSettings GetInterconnectSettings(const NKikimrConfig::TInter
     }
 
     result.EnableExternalDataChannel = config.GetEnableExternalDataChannel();
+    result.EnableKernelLiveness = config.GetEnableKernelLiveness();
+    if (config.HasKernelKeepAliveIdleDuration()) {
+        result.KernelKeepAliveIdle = DurationFromProto(config.GetKernelKeepAliveIdleDuration());
+    }
+    if (config.HasKernelKeepAliveIntervalDuration()) {
+        result.KernelKeepAliveInterval = DurationFromProto(config.GetKernelKeepAliveIntervalDuration());
+    }
+    if (config.HasKernelKeepAliveProbeCount()) {
+        result.KernelKeepAliveProbes = config.GetKernelKeepAliveProbeCount();
+    }
+    if (config.HasKernelUserTimeoutDuration()) {
+        result.KernelUserTimeout = DurationFromProto(config.GetKernelUserTimeoutDuration());
+    }
+    result.DisableUserSpacePingWhenKernelLivenessEnabled =
+        config.GetDisableUserSpacePingWhenKernelLivenessEnabled();
 
     if (config.HasValidateIncomingPeerViaDirectLookup()) {
         result.ValidateIncomingPeerViaDirectLookup = config.GetValidateIncomingPeerViaDirectLookup();

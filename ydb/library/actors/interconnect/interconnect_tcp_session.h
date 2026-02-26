@@ -561,6 +561,9 @@ namespace NActors {
         TDuration GetLostConnectionTimeout() const;
         ui32 GetTotalInflightAmountOfData() const;
         ui64 GetMaxCyclesPerEvent() const;
+        bool UseKernelLivenessMode() const {
+            return Params.UseKernelLiveness && DisableUserSpacePingWhenKernelLivenessEnabled;
+        }
 
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -598,6 +601,7 @@ namespace NActors {
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+        const bool DisableUserSpacePingWhenKernelLivenessEnabled;
         const TSessionParams Params;
         std::unique_ptr<TEventHolderPool> Pool;
         TMaybe<TChannelScheduler> ChannelScheduler;

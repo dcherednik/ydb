@@ -12,12 +12,14 @@
 #include <ydb/library/actors/core/actor_coroutine.h>
 #include <ydb/library/actors/core/log.h>
 #include <ydb/library/actors/protos/services_common.pb.h>
+#include <util/network/socket.h>
 #include <util/system/getpid.h>
 #include <util/random/entropy.h>
 #include <util/generic/overloaded.h>
 
 #include <google/protobuf/text_format.h>
 
+#include <limits>
 #include <variant>
 
 namespace NActors {
@@ -95,6 +97,7 @@ namespace NActors {
             THandshakeActor *Actor = nullptr;
             TIntrusivePtr<NInterconnect::TStreamSocket> Socket;
             TPollerToken::TPtr PollerToken;
+            bool KernelLivenessReady = false;
 
         public:
             TConnection(THandshakeActor *actor, TIntrusivePtr<NInterconnect::TStreamSocket> socket)
@@ -148,6 +151,7 @@ namespace NActors {
             void Reset() {
                 Socket.Reset();
                 PollerToken.Reset();
+                KernelLivenessReady = false;
             }
 
             void SetupSocket() {
@@ -163,6 +167,8 @@ namespace NActors {
                 if (const auto& buffer = Actor->Common->Settings.TCPSocketBufferSize) {
                     Socket->SetSendBufferSize(buffer);
                 }
+
+                KernelLivenessReady = SetupKernelLiveness();
             }
 
             void RegisterInPoller() {
@@ -226,8 +232,87 @@ namespace NActors {
                 }
             }
 
+            bool IsKernelLivenessReady() const {
+                return KernelLivenessReady;
+            }
+
             TIntrusivePtr<NInterconnect::TStreamSocket>& GetSocketRef() { return Socket; }
             operator bool() const { return static_cast<bool>(Socket); }
+
+        private:
+            static int ClampSockOptValue(ui64 value) {
+                constexpr ui64 maxValue = static_cast<ui64>(std::numeric_limits<int>::max());
+                return value > maxValue ? std::numeric_limits<int>::max() : static_cast<int>(value);
+            }
+
+            bool SetIntSockOpt(int level, int option, int value, const char *name, bool mandatory) {
+                if (SetSockOpt(*Socket, level, option, value) == 0) {
+                    return true;
+                }
+
+                const int err = errno;
+                if (mandatory) {
+                    LOG_LOG(*TlsActivationContext, NLog::PRI_WARN, NActorsServices::INTERCONNECT,
+                        "%s ICH40 Kernel liveness disabled for socket# %d due to setsockopt(%s=%d) failure, errno# %d (%s)",
+                        Actor->LogPrefix.data(), int(*Socket), name, value, err, strerror(err));
+                } else {
+                    LOG_LOG(*TlsActivationContext, NLog::PRI_WARN, NActorsServices::INTERCONNECT,
+                        "%s ICH41 Kernel liveness optional setsockopt(%s=%d) failed for socket# %d, errno# %d (%s)",
+                        Actor->LogPrefix.data(), name, value, int(*Socket), err, strerror(err));
+                }
+                return false;
+            }
+
+            bool SetupKernelLiveness() {
+                if (!Actor->Common->Settings.EnableKernelLiveness) {
+                    return false;
+                }
+
+#if defined(_linux_)
+#if !defined(TCP_KEEPIDLE) || !defined(TCP_KEEPINTVL) || !defined(TCP_KEEPCNT)
+                LOG_LOG(*TlsActivationContext, NLog::PRI_WARN, NActorsServices::INTERCONNECT,
+                    "%s ICH42 Kernel liveness requested, but TCP keepalive tuning options are unavailable on this platform",
+                    Actor->LogPrefix.data());
+                return false;
+#else
+                const auto& settings = Actor->Common->Settings;
+                const ui64 keepAliveIdleSec = settings.KernelKeepAliveIdle.Seconds();
+                const ui64 keepAliveIntervalSec = settings.KernelKeepAliveInterval.Seconds();
+                if (!keepAliveIdleSec || !keepAliveIntervalSec || !settings.KernelKeepAliveProbes) {
+                    LOG_LOG(*TlsActivationContext, NLog::PRI_WARN, NActorsServices::INTERCONNECT,
+                        "%s ICH43 Kernel liveness disabled due to invalid settings KeepAliveIdle# %s KeepAliveInterval# %s KeepAliveProbes# %" PRIu32,
+                        Actor->LogPrefix.data(), settings.KernelKeepAliveIdle.ToString().data(),
+                        settings.KernelKeepAliveInterval.ToString().data(), settings.KernelKeepAliveProbes);
+                    return false;
+                }
+
+                if (!SetIntSockOpt(SOL_SOCKET, SO_KEEPALIVE, 1, "SO_KEEPALIVE", true)) {
+                    return false;
+                }
+                if (!SetIntSockOpt(IPPROTO_TCP, TCP_KEEPIDLE, ClampSockOptValue(keepAliveIdleSec), "TCP_KEEPIDLE", true)) {
+                    return false;
+                }
+                if (!SetIntSockOpt(IPPROTO_TCP, TCP_KEEPINTVL, ClampSockOptValue(keepAliveIntervalSec), "TCP_KEEPINTVL", true)) {
+                    return false;
+                }
+                if (!SetIntSockOpt(IPPROTO_TCP, TCP_KEEPCNT, ClampSockOptValue(settings.KernelKeepAliveProbes), "TCP_KEEPCNT", true)) {
+                    return false;
+                }
+
+#if defined(TCP_USER_TIMEOUT)
+                if (const ui64 userTimeoutMs = settings.KernelUserTimeout.MilliSeconds()) {
+                    SetIntSockOpt(IPPROTO_TCP, TCP_USER_TIMEOUT, ClampSockOptValue(userTimeoutMs), "TCP_USER_TIMEOUT", false);
+                }
+#endif
+
+                return true;
+#endif
+#else
+                LOG_LOG(*TlsActivationContext, NLog::PRI_WARN, NActorsServices::INTERCONNECT,
+                    "%s ICH44 Kernel liveness requested, but this platform is unsupported", Actor->LogPrefix.data());
+                return false;
+#endif
+            }
         };
 
     private:
@@ -840,6 +925,7 @@ namespace NActors {
                 request.SetRequestExternalDataChannel(Common->Settings.EnableExternalDataChannel);
                 request.SetRequestXxhash(true);
                 request.SetRequestXdcShuffle(true);
+                request.SetRequestKernelLiveness(MainChannel.IsKernelLivenessReady());
                 request.SetHandshakeId(*HandshakeId);
 
                 ui32 pending = 0;
@@ -933,6 +1019,7 @@ namespace NActors {
                 Params.UseExternalDataChannel = success.GetUseExternalDataChannel();
                 Params.UseXxhash = success.GetUseXxhash();
                 Params.UseXdcShuffle = success.GetUseXdcShuffle();
+                Params.UseKernelLiveness = success.GetUseKernelLiveness() && MainChannel.IsKernelLivenessReady();
                 if (success.HasServerScopeId()) {
                     ParsePeerScopeId(success.GetServerScopeId());
                 }
@@ -981,6 +1068,8 @@ namespace NActors {
             } else {
                 ProgramInfo.ConstructInPlace(); // successful handshake
             }
+
+            Params.UseKernelLiveness = Params.UseKernelLiveness && MainChannel.IsKernelLivenessReady();
         }
 
         std::vector<NInterconnect::TAddress> ResolvePeer() {
@@ -1112,6 +1201,7 @@ namespace NActors {
                     PeerVirtualId = request.Header.SelfVirtualId;
                     NextPacketToPeer = ack->NextPacket;
                     Params = ack->Params;
+                    Params.UseKernelLiveness = Params.UseKernelLiveness && MainChannel.IsKernelLivenessReady();
 
                     // only succeed in case when proxy returned valid SelfVirtualId; otherwise it wants us to terminate
                     // the handshake process and it does not expect the handshake reply
@@ -1227,6 +1317,7 @@ namespace NActors {
                 Params.UseExternalDataChannel = request.GetRequestExternalDataChannel() && Common->Settings.EnableExternalDataChannel;
                 Params.UseXxhash = request.GetRequestXxhash();
                 Params.UseXdcShuffle = request.GetRequestXdcShuffle();
+                Params.UseKernelLiveness = request.GetRequestKernelLiveness() && MainChannel.IsKernelLivenessReady();
 
                 if (Params.UseExternalDataChannel) {
                     if (request.HasHandshakeId()) {
@@ -1299,6 +1390,7 @@ namespace NActors {
                     success.SetUseExternalDataChannel(Params.UseExternalDataChannel);
                     success.SetUseXxhash(Params.UseXxhash);
                     success.SetUseXdcShuffle(Params.UseXdcShuffle);
+                    success.SetUseKernelLiveness(Params.UseKernelLiveness);
 
                     ui32 pending = 0;
                     auto& actors = Common->ConnectionCheckerActorIds;

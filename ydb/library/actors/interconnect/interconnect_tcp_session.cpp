@@ -33,6 +33,7 @@ namespace NActors {
         , Proxy(proxy)
         , CloseOnIdleWatchdog(GetCloseOnIdleTimeout(), std::bind(&TThis::OnCloseOnIdleTimerHit, this))
         , LostConnectionWatchdog(GetLostConnectionTimeout(), std::bind(&TThis::OnLostConnectionTimerHit, this))
+        , DisableUserSpacePingWhenKernelLivenessEnabled(proxy->Common->Settings.DisableUserSpacePingWhenKernelLivenessEnabled)
         , Params(std::move(params))
         , TotalOutputQueueSize(0)
         , OutputStuckFlag(false)
@@ -315,7 +316,7 @@ namespace NActors {
         RearmCloseOnIdle();
 
         // reset activity timestamps
-        LastInputActivityTimestamp = LastPayloadActivityTimestamp = TActivationContext::Monotonic();
+        LastInputActivityTimestamp = LastPayloadActivityTimestamp = LastPingTimestamp = TActivationContext::Monotonic();
 
         LOG_INFO_IC_SESSION("ICS10", "traffic start");
 
@@ -895,9 +896,12 @@ namespace NActors {
     void TInterconnectSessionTCP::ResetFlushLogic() {
         ForcePacketTimestamp = TMonotonic::Max();
         UnconfirmedBytes = 0;
-        const TDuration ping = Proxy->Common->Settings.PingPeriod;
-        if (ping != TDuration::Zero() && !NumEventsInQueue) {
-            SetForcePacketTimestamp(ping);
+        // Kernel liveness disables user-space keepalive traffic generation.
+        if (!UseKernelLivenessMode()) {
+            const TDuration ping = Proxy->Common->Settings.PingPeriod;
+            if (ping != TDuration::Zero() && !NumEventsInQueue) {
+                SetForcePacketTimestamp(ping);
+            }
         }
     }
 
@@ -1118,12 +1122,14 @@ namespace NActors {
                 flagState = EFlag::GREEN;
 
                 do {
-                    auto lastInputDelay = TActivationContext::Monotonic() - LastInputActivityTimestamp;
-                    if (lastInputDelay * 4 >= GetDeadPeerTimeout() * 3) {
-                        flagState = EFlag::ORANGE;
-                        break;
-                    } else if (lastInputDelay * 2 >= GetDeadPeerTimeout()) {
-                        flagState = EFlag::YELLOW;
+                    if (!UseKernelLivenessMode()) {
+                        auto lastInputDelay = TActivationContext::Monotonic() - LastInputActivityTimestamp;
+                        if (lastInputDelay * 4 >= GetDeadPeerTimeout() * 3) {
+                            flagState = EFlag::ORANGE;
+                            break;
+                        } else if (lastInputDelay * 2 >= GetDeadPeerTimeout()) {
+                            flagState = EFlag::YELLOW;
+                        }
                     }
 
                     // check utilization
@@ -1218,6 +1224,10 @@ namespace NActors {
     }
 
     void TInterconnectSessionTCP::IssuePingRequest() {
+        if (UseKernelLivenessMode()) {
+            return;
+        }
+
         const TMonotonic now = TActivationContext::Monotonic();
         if (now >= LastPingTimestamp + PingPeriodicity) {
             LOG_DEBUG_IC_SESSION("ICS00", "Issuing ping request");
@@ -1368,6 +1378,7 @@ namespace NActors {
 
                             MON_VAR(Created)
                             MON_VAR(Params.UseExternalDataChannel)
+                            MON_VAR(Params.UseKernelLiveness)
                             MON_VAR(NewConnectionSet)
                             MON_VAR(ReceiverId)
                             MON_VAR(MessagesGot)

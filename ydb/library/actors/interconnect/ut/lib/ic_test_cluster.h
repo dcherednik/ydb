@@ -23,6 +23,7 @@ public:
         USE_ZC = 1,
         USE_TLS = 1 << 1,
         RDMA_POLLING_CQ = 1 << 2,
+        DISABLE_RDMA = 1 << 3,
     };
 
     using TCheckerFactory = std::function<IActor*(ui32)>;
@@ -41,7 +42,8 @@ private:
 public:
     TTestICCluster(ui32 numNodes = 1, NActors::TChannelsConfig channelsConfig = NActors::TChannelsConfig(),
                    TTrafficInterrupterSettings* tiSettings = nullptr, TIntrusivePtr<NLog::TSettings> loggerSettings = nullptr, Flags flags = EMPTY,
-                   TCheckerFactory checkerFactory = {}, TDuration deadPeerTimeout = TDuration::Seconds(2), ui32 inflight = TNode::DefaultInflight())
+                   TCheckerFactory checkerFactory = {}, TDuration deadPeerTimeout = TDuration::Seconds(2), ui32 inflight = TNode::DefaultInflight(),
+                   std::function<void(ui32, NActors::TInterconnectSettings&)> settingsCustomizer = {})
         : NumNodes(numNodes)
         , DeadPeerTimeout(deadPeerTimeout)
         , Counters(new NMonitoring::TDynamicCounters)
@@ -77,7 +79,9 @@ public:
             Nodes.emplace(i, MakeHolder<TNode>(i, NumNodes, portMap, Address, Counters, DeadPeerTimeout, ChannelsConfig,
                 /*numDynamicNodes=*/0, /*numThreads=*/1, LoggerSettings, inflight,
                 flags & USE_ZC ? ESocketSendOptimization::IC_MSG_ZEROCOPY : ESocketSendOptimization::DISABLED,
-                flags & USE_TLS, checkerFactory, flags & RDMA_POLLING_CQ ? NInterconnect::NRdma::ECqMode::POLLING : NInterconnect::NRdma::ECqMode::EVENT));
+                flags & USE_TLS, checkerFactory, flags & RDMA_POLLING_CQ ? NInterconnect::NRdma::ECqMode::POLLING : NInterconnect::NRdma::ECqMode::EVENT,
+                !(flags & DISABLE_RDMA),
+                settingsCustomizer));
         }
     }
 

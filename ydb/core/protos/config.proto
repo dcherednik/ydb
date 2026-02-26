@@ -519,6 +519,12 @@ message TInterconnectConfig {
     optional bool RdmaChecksum = 54 [default = true];
     optional ERdmaCqMode RdmaCqMode = 55;
     optional uint32 RdmaMemPoolSizeLimitMb = 56 [default = 4096];
+    optional bool EnableKernelLiveness = 57 [default = false];
+    optional NKikimrConfigUnits.TDuration KernelKeepAliveIdleDuration = 58;
+    optional NKikimrConfigUnits.TDuration KernelKeepAliveIntervalDuration = 59;
+    optional uint32 KernelKeepAliveProbeCount = 60 [default = 5];
+    optional NKikimrConfigUnits.TDuration KernelUserTimeoutDuration = 61;
+    optional bool DisableUserSpacePingWhenKernelLivenessEnabled = 62 [default = true];
 
     // ballast is added to IC handshake frames to ensure correctness of jumbo frames transmission over network
     optional uint32 HandshakeBallastSize = 14;
