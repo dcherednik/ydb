@@ -2,6 +2,7 @@
 
 #include "defs.h"
 #include "common.h"
+#include <ydb/library/actors/core/actorsystem.h>
 
 namespace NKikimr::NBsQueue {
 
@@ -76,7 +77,22 @@ public:
             LocalEvent.reset(ev->ReleaseBase().Release());
         } else {
             const bool hasEvent = ev->HasEvent();
-            Buffer = ev->ReleaseChainBuffer();
+            if (hasEvent) {
+                auto* rcBufAlloc = TlsActivationContext ?
+                    TlsActivationContext->AsActorContext().ActorSystem()->GetRcBufAllocator() : GetDefaultRcBufAllocator();
+                if (auto* rdmaAllocator = dynamic_cast<NActors::TRdmaAllocatorWithFallback*>(rcBufAlloc)) {
+                    IEventBase* eventBase = ev->GetBase();
+                    auto rope = eventBase->SerializeToRope(rdmaAllocator->GetRdmaMemPool().get());
+                    if (rope) {
+                        Buffer = MakeIntrusive<TEventSerializedData>(
+                            std::move(*rope), eventBase->CreateSerializationInfo()
+                        );
+                    }
+                }
+            }
+            if (!Buffer) {
+                Buffer = ev->ReleaseChainBuffer();
+            }
             ByteSize = Buffer->GetSize();
             if (hasEvent) {
                 ++*serItems;
