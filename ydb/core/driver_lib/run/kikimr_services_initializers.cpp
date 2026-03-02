@@ -498,21 +498,31 @@ static TInterconnectSettings GetInterconnectSettings(const NKikimrConfig::TInter
     }
 
     result.EnableExternalDataChannel = config.GetEnableExternalDataChannel();
-    result.EnableKernelLiveness = config.GetEnableKernelLiveness();
-    if (config.HasKernelKeepAliveIdleDuration()) {
-        result.KernelKeepAliveIdle = DurationFromProto(config.GetKernelKeepAliveIdleDuration());
+    result.EnableKernelLiveness = false;
+    if (config.GetUseKernelKeepAlive()) {
+        result.EnableKernelLiveness = true;
+
+        const TDuration keepAliveIdle = config.HasPingPeriodDuration()
+            ? DurationFromProto(config.GetPingPeriodDuration())
+            : TDuration::Seconds(3);
+        const TDuration keepAliveInterval = keepAliveIdle / 2;
+        const TDuration deadPeerTimeout = result.DeadPeer != TDuration::Zero()
+            ? result.DeadPeer
+            : TDuration::Seconds(10);
+
+        result.KernelKeepAliveIdle = keepAliveIdle;
+        result.KernelKeepAliveInterval = keepAliveInterval;
+        result.KernelUserTimeout = deadPeerTimeout;
+
+        const ui64 keepAliveIntervalMs = keepAliveInterval.MilliSeconds();
+        const ui64 deadPeerTimeoutMs = deadPeerTimeout.MilliSeconds();
+        const ui64 probes = keepAliveIntervalMs
+            ? Max<ui64>(1, deadPeerTimeoutMs / keepAliveIntervalMs)
+            : 1;
+        result.KernelKeepAliveProbes = probes < Max<ui32>()
+            ? static_cast<ui32>(probes)
+            : Max<ui32>();
     }
-    if (config.HasKernelKeepAliveIntervalDuration()) {
-        result.KernelKeepAliveInterval = DurationFromProto(config.GetKernelKeepAliveIntervalDuration());
-    }
-    if (config.HasKernelKeepAliveProbeCount()) {
-        result.KernelKeepAliveProbes = config.GetKernelKeepAliveProbeCount();
-    }
-    if (config.HasKernelUserTimeoutDuration()) {
-        result.KernelUserTimeout = DurationFromProto(config.GetKernelUserTimeoutDuration());
-    }
-    result.DisableUserSpacePingWhenKernelLivenessEnabled =
-        config.GetDisableUserSpacePingWhenKernelLivenessEnabled();
 
     if (config.HasValidateIncomingPeerViaDirectLookup()) {
         result.ValidateIncomingPeerViaDirectLookup = config.GetValidateIncomingPeerViaDirectLookup();
