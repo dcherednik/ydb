@@ -372,6 +372,19 @@ namespace NActors {
             return DurationToCycles(TDuration::MicroSeconds(500));
         }
 
+        bool UseKernelLivenessMode() const {
+            // Kernel liveness has two independent switches:
+            // 1) negotiated capability (`Params.UseKernelLiveness`) tells that both peers can run in this mode;
+            // 2) local policy (`DisableUserSpacePingWhenKernelLivenessEnabled`) decides whether to actually
+            //    disable user-space liveness checks.
+            //
+            // Keep this condition identical to TInterconnectSessionTCP::UseKernelLivenessMode() so that both
+            // actors either keep legacy user-space liveness (ping + dead-peer watchdog) enabled, or disable it
+            // together and rely on kernel keepalive/user-timeout.
+            return Params.UseKernelLiveness
+                && Common->Settings.DisableUserSpacePingWhenKernelLivenessEnabled;
+        }
+
         const TDuration DeadPeerTimeout;
         TMonotonic LastReceiveTimestamp;
         void HandleCheckDeadPeer();
