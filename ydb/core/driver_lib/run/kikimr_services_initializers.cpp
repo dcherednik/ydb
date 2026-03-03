@@ -444,6 +444,9 @@ static TInterconnectSettings GetInterconnectSettings(const NKikimrConfig::TInter
     if (config.HasPingPeriodDuration()) {
         result.PingPeriod = DurationFromProto(config.GetPingPeriodDuration());
     }
+    if (config.HasClockSkewPingTimeoutDuration()) {
+        result.ClockSkewPingTimeout = DurationFromProto(config.GetClockSkewPingTimeoutDuration());
+    }
 
     if (config.HasForceConfirmPeriodDuration()) {
         result.ForceConfirmPeriod = DurationFromProto(config.GetForceConfirmPeriodDuration());

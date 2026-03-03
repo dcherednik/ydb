@@ -64,6 +64,9 @@ namespace NActors {
         TDuration KernelKeepAliveInterval = TDuration::Seconds(1);
         ui32 KernelKeepAliveProbes = 5;
         TDuration KernelUserTimeout = TDuration::Seconds(10);
+        // Period for user-space ping/clock probes that keep clock-skew telemetry alive
+        // when kernel keepalive mode disables user-space dead-peer logic.
+        TDuration ClockSkewPingTimeout = TDuration::Minutes(1);
         bool DisableUserSpacePingWhenKernelLivenessEnabled = true;
         bool ValidateIncomingPeerViaDirectLookup = false;
         ui32 SocketBacklogSize = 0; // SOMAXCONN if zero

@@ -16,6 +16,23 @@ ui64 GetSessionCounter(TTestICCluster& cluster, ui32 me, ui32 peer, TStringBuf n
     return FromString<ui64>(ExtractPattern(cluster, me, peer, start, "<"));
 }
 
+TDuration GetSessionDurationMetric(TTestICCluster& cluster, ui32 me, ui32 peer, TStringBuf name) {
+    const TString start = TStringBuilder() << "<tr><td>" << name << "</td><td>";
+    return TDuration::Parse(ExtractPattern(cluster, me, peer, start, "<"));
+}
+
+i64 GetSessionSignedDurationMetricUs(TTestICCluster& cluster, ui32 me, ui32 peer, TStringBuf name) {
+    const TString start = TStringBuilder() << "<tr><td>" << name << "</td><td>";
+    const TString value = ExtractPattern(cluster, me, peer, start, "<");
+    TStringBuf metric(value);
+    i64 sign = 1;
+    if (metric && (metric[0] == '+' || metric[0] == '-')) {
+        sign = metric[0] == '-' ? -1 : 1;
+        metric = metric.SubStr(1);
+    }
+    return sign * TDuration::Parse(metric).MicroSeconds();
+}
+
 ui64 WaitForSessionCounter(TTestICCluster& cluster, ui32 me, ui32 peer, TStringBuf name,
         TDuration timeout = TDuration::Seconds(10)) {
     const TInstant deadline = TInstant::Now() + timeout;
@@ -379,6 +396,43 @@ Y_UNIT_TEST_SUITE(Interconnect) {
         const ui64 confirmByTimeout = WaitForSessionCounter(cluster, 1, 2, "ConfirmPacketsForcedByTimeout");
         Cerr << "confirmBySize# " << confirmBySize << " confirmByTimeout# " << confirmByTimeout << Endl;
         UNIT_ASSERT_GT(confirmBySize + confirmByTimeout, 0ULL);
+    }
+
+    Y_UNIT_TEST(KernelLivenessClockSkewPingTimeoutUpdatesMetrics) {
+        auto settingsCustomizer = [](ui32, TInterconnectSettings& settings) {
+            settings.EnableKernelLiveness = true;
+            settings.ClockSkewPingTimeout = TDuration::MilliSeconds(200);
+            settings.PingPeriod = TDuration::Seconds(30);
+        };
+
+        TTestICCluster cluster(2, TChannelsConfig(), nullptr, nullptr, TTestICCluster::DISABLE_RDMA,
+            {}, TDuration::Seconds(30), TNode::DefaultInflight(), settingsCustomizer);
+
+        auto* recipientPtr = new TRecipientActor;
+        const TActorId recipient = cluster.RegisterActor(recipientPtr, 1);
+        cluster.RegisterActor(new TSenderActor(recipient, 1), 2);
+
+        WaitForCondition(TDuration::Seconds(10), [&] {
+            return recipientPtr->GetReceived() >= 1;
+        }, "initial message delivery for clock-skew telemetry");
+
+        UNIT_ASSERT_VALUES_EQUAL(WaitForSessionCounter(cluster, 2, 1, "Params.UseKernelLiveness"), 1ULL);
+
+        WaitForCondition(TDuration::Seconds(10), [&] {
+            try {
+                return GetSessionDurationMetric(cluster, 2, 1, "GetPingRTT()") > TDuration::Zero();
+            } catch (const TPatternNotFound&) {
+                return false;
+            }
+        }, "kernel-liveness ping RTT metric updated");
+
+        const TDuration pingRtt = GetSessionDurationMetric(cluster, 2, 1, "GetPingRTT()");
+        const TDuration sinceLastPing = GetSessionDurationMetric(cluster, 2, 1, "now - LastPingTimestamp");
+        const i64 clockSkewUs = GetSessionSignedDurationMetricUs(cluster, 2, 1, "clockSkew");
+        Cerr << "pingRtt# " << pingRtt << " sinceLastPing# " << sinceLastPing << " clockSkewUs# " << clockSkewUs << Endl;
+
+        UNIT_ASSERT_GT(pingRtt, TDuration::Zero());
+        UNIT_ASSERT_LT(sinceLastPing, TDuration::Seconds(2));
     }
 
     Y_UNIT_TEST(SetupRdmaSession) {

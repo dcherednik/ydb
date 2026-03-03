@@ -896,7 +896,8 @@ namespace NActors {
     void TInterconnectSessionTCP::ResetFlushLogic() {
         ForcePacketTimestamp = TMonotonic::Max();
         UnconfirmedBytes = 0;
-        // Kernel liveness disables user-space keepalive traffic generation.
+        // Kernel liveness disables user-space dead-peer keepalive generation.
+        // Telemetry pings for clock-skew are issued from periodic wakeups.
         if (!UseKernelLivenessMode()) {
             const TDuration ping = Proxy->Common->Settings.PingPeriod;
             if (ping != TDuration::Zero() && !NumEventsInQueue) {
@@ -1163,6 +1164,16 @@ namespace NActors {
         }
 
         if (connected && reschedule) {
+            // In kernel liveness mode, idle sessions can stay quiescent for a long time because
+            // dead-peer checks are delegated to TCP keepalive/user-timeout. Trigger GenerateTraffic()
+            // from the existing wakeup loop only when telemetry probe time has come.
+            if (Socket && UseKernelLivenessMode()) {
+                const TDuration timeout = Proxy->Common->Settings.ClockSkewPingTimeout;
+                const TMonotonic now = TActivationContext::Monotonic();
+                if (timeout != TDuration::Zero() && now >= LastPingTimestamp + timeout) {
+                    GenerateTraffic();
+                }
+            }
             Schedule(TDuration::Seconds(1), new TEvents::TEvWakeup);
         }
     }
@@ -1224,12 +1235,14 @@ namespace NActors {
     }
 
     void TInterconnectSessionTCP::IssuePingRequest() {
-        if (UseKernelLivenessMode()) {
+        const TDuration period = UseKernelLivenessMode()
+            ? Proxy->Common->Settings.ClockSkewPingTimeout
+            : PingPeriodicity;
+        if (period == TDuration::Zero()) {
             return;
         }
-
         const TMonotonic now = TActivationContext::Monotonic();
-        if (now >= LastPingTimestamp + PingPeriodicity) {
+        if (now >= LastPingTimestamp + period) {
             LOG_DEBUG_IC_SESSION("ICS00", "Issuing ping request");
             if (Socket) {
                 MakePacket(false, GetCycleCountFast() | TTcpPacketBuf::PingRequestMask);
