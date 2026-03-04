@@ -570,6 +570,15 @@ public:
                 // SecureWipeBuffer((ui8*)MainKey.data(), sizeof(NPDisk::TKey) * MainKey.size());
             } else {
                 // Format is read OK
+                TStringStream ss;
+                ss << "pdiskMainKey {";
+                for (const auto& x : MainKey.Keys) {
+                    ss << x << " ";
+                }
+                ss << "error: " << MainKey.ErrorReason.Quote();
+                ss << "is initialized: " << MainKey.IsInitialized;
+                ss << "}";
+                Cerr << ss.Str() << Endl; 
                 SecureWipeBuffer((ui8*)MainKey.Keys.data(), sizeof(NPDisk::TKey) * MainKey.Keys.size());
                 P_LOG(PRI_NOTICE, BSP01, "Successfully read format record", (Format, PDisk->Format.ToString()));
                 TString info;
