@@ -41,8 +41,8 @@ public:
         : TSimpleCqBase(as, sz, c, true)
     {}
 
-    int Init(const TRdmaCtx* ctx, const TRdmaRuntimeParams& params) noexcept {
-        return TSimpleCqBase::Init(ctx, params, nullptr);
+    int Init(const TRdmaCtx* ctx, const TRdmaRuntimeParams& params, std::shared_ptr<IMemPool> memPool) noexcept {
+        return TSimpleCqBase::Init(ctx, params, std::move(memPool), nullptr);
     }
 
     virtual ~TSimpleCq() {
@@ -61,13 +61,13 @@ public:
         : TSimpleCqBase(as, sz, c, false)
     {}
 
-    int Init(const TRdmaCtx* ctx, const TRdmaRuntimeParams& params) noexcept {
+    int Init(const TRdmaCtx* ctx, const TRdmaRuntimeParams& params, std::shared_ptr<IMemPool> memPool) noexcept {
         CompChannel = ibv_create_comp_channel(ctx->GetContext());
         if (!CompChannel) {
             return errno;
         }
 
-        int err = TSimpleCqBase::Init(ctx, params, CompChannel);
+        int err = TSimpleCqBase::Init(ctx, params, std::move(memPool), CompChannel);
         if (err) {
             return err;
         }
@@ -144,12 +144,12 @@ private:
     ibv_comp_channel* CompChannel;
 };
 
-ICq::TPtr CreateSimpleCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaRuntimeParams runtimeParams, NMonitoring::TDynamicCounters* counter) noexcept {
-    return CreateCq<TSimpleCq>(ctx, as, runtimeParams, counter);
+ICq::TPtr CreateSimpleCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaRuntimeParams runtimeParams, std::shared_ptr<IMemPool> memPool, NMonitoring::TDynamicCounters* counter) noexcept {
+    return CreateCq<TSimpleCq>(ctx, as, runtimeParams, std::move(memPool), counter);
 }
 
-ICq::TPtr CreateSimpleEventDrivenCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaRuntimeParams runtimeParams, NMonitoring::TDynamicCounters* counter) noexcept {
-    return CreateCq<TSimpleEventDrivenCq>(ctx, as, runtimeParams, counter);
+ICq::TPtr CreateSimpleEventDrivenCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaRuntimeParams runtimeParams, std::shared_ptr<IMemPool> memPool, NMonitoring::TDynamicCounters* counter) noexcept {
+    return CreateCq<TSimpleEventDrivenCq>(ctx, as, runtimeParams, std::move(memPool), counter);
 }
 
 const int TQueuePair::UnknownQpState = IBV_QPS_UNKNOWN;

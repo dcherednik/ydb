@@ -16,7 +16,7 @@ using namespace NActors;
 
 namespace NInterconnect::NRdma {
 
-using TCqFactory = std::function<ICq::TPtr(const TRdmaCtx*)>;
+using TCqFactory = std::function<ICq::TPtr(const TRdmaCtx*, std::shared_ptr<IMemPool>)>;
 
 static const TDuration PeriodicActionInterval = TDuration::Seconds(1);
 
@@ -109,7 +109,7 @@ public:
         LOG_DEBUG_IC("ICRDMA", "Got TEvPollerRegisterResult for fd: %d",
                 ev->Get()->Socket.Get()->GetDescriptor());
         auto rdmaCtx = static_cast<TAsyncEventDesctiptor*>(ev->Get()->Socket.Get())->GetContext();
-        auto cqPtr = CqFactory(rdmaCtx);
+        auto cqPtr = CqFactory(rdmaCtx, MemPool);
         auto it = CqMap.find(rdmaCtx);
         Y_ABORT_UNLESS(it != CqMap.end());
         Y_ABORT_UNLESS(it->second.index() == 1);
@@ -253,13 +253,13 @@ private:
 NActors::IActor* CreateCqActor(const TRdmaRuntimeParams& runtimeParams, ECqMode mode, NMonitoring::TDynamicCounters* counters) {
     switch (mode) {
         case NInterconnect::NRdma::ECqMode::POLLING:
-            return new TCqActor([runtimeParams, counters](const TRdmaCtx* ctx) {
-                return CreateSimpleCq(ctx, TlsActivationContext->AsActorContext().ActorSystem(), runtimeParams, counters);
+            return new TCqActor([runtimeParams, counters](const TRdmaCtx* ctx, std::shared_ptr<IMemPool> memPool) {
+                return CreateSimpleCq(ctx, TlsActivationContext->AsActorContext().ActorSystem(), runtimeParams, std::move(memPool), counters);
             });
 
         case NInterconnect::NRdma::ECqMode::EVENT:
-            return new TCqActor([runtimeParams, counters](const TRdmaCtx* ctx) {
-                return CreateSimpleEventDrivenCq(ctx, TlsActivationContext->AsActorContext().ActorSystem(), runtimeParams, counters);
+            return new TCqActor([runtimeParams, counters](const TRdmaCtx* ctx, std::shared_ptr<IMemPool> memPool) {
+                return CreateSimpleEventDrivenCq(ctx, TlsActivationContext->AsActorContext().ActorSystem(), runtimeParams, std::move(memPool), counters);
             });
     }
 }

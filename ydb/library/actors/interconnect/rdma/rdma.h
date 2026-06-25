@@ -4,6 +4,7 @@
 #include <util/generic/vector.h>
 #include <util/stream/output.h>
 
+#include <memory>
 #include <optional>
 
 struct ibv_qp;
@@ -29,6 +30,7 @@ namespace NInterconnect::NRdma {
 class TRdmaCtx;
 class TCqCommon;
 class TCqActor;
+class IMemPool;
 struct TEvRdmaIoDone;
 
 class TQueuePair;
@@ -73,6 +75,9 @@ public:
     virtual std::optional<TErr> DoWrBatchAsync(std::shared_ptr<TQueuePair> qp, std::unique_ptr<IIbVerbsBuilder> builder) noexcept = 0;
     virtual TWrStats GetWrStats() const noexcept = 0;
 
+    virtual void RegisterQpAsync(ui32 qpNum) noexcept;
+    virtual void DeregisterQpAsync(ui32 qpNum) noexcept;
+
     static bool IsWrSuccess(const TAllocResult& ar) {
         return std::holds_alternative<IWr*>(ar);
     }
@@ -86,8 +91,8 @@ private:
     virtual void NotifyErr() noexcept = 0;
 };
 
-ICq::TPtr CreateSimpleCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaRuntimeParams runtimeParams, NMonitoring::TDynamicCounters* counter) noexcept;
-ICq::TPtr CreateSimpleEventDrivenCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaRuntimeParams runtimeParams, NMonitoring::TDynamicCounters* counter) noexcept;
+ICq::TPtr CreateSimpleCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaRuntimeParams runtimeParams, std::shared_ptr<IMemPool> memPool, NMonitoring::TDynamicCounters* counter) noexcept;
+ICq::TPtr CreateSimpleEventDrivenCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaRuntimeParams runtimeParams, std::shared_ptr<IMemPool> memPool, NMonitoring::TDynamicCounters* counter) noexcept;
 
 struct THandshakeData {
     ui32 QpNum;

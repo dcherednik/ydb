@@ -9,6 +9,9 @@
 #include <ydb/library/actors/core/actorsystem.h>
 #include <library/cpp/monlib/metrics/metric_registry.h>
 #include <library/cpp/monlib/metrics/metric_sub_registry.h>
+#include <library/cpp/threading/queue/mpsc_read_as_filled.h>
+
+
 
 #include <util/thread/lfqueue.h>
 #include <util/system/spinlock.h>
@@ -16,6 +19,7 @@
 #include <util/system/sanitizers.h>
 #include <util/system/compiler.h>
 
+#include <cerrno>
 #include <span>
 
 namespace NInterconnect::NRdma {
@@ -73,7 +77,11 @@ public:
     static constexpr ui64 SRQ_WR_MASK = 1ull << 63;
     ibv_srq* Get() noexcept { return Srq; }
 
-    int Init(const TRdmaCtx* ctx, const TRdmaRuntimeParams& params) noexcept {
+    int Init(const TRdmaCtx* ctx, const TRdmaRuntimeParams& params, std::shared_ptr<IMemPool> memPool) noexcept {
+        if (!memPool || params.MaxSrqWr <= 0 || params.RecieveBufSz <= 0) {
+            return EINVAL;
+        }
+
         struct ibv_srq_init_attr srqInitAttr;
         memset(&srqInitAttr, 0, sizeof(srqInitAttr));
 
@@ -86,48 +94,86 @@ public:
         }
 
         struct TPostEntry {
-            ibv_recv_wr Wr;
-            ibv_sge Sg;
+            ibv_recv_wr Wr = {};
+            ibv_sge Sg = {};
         };
-        std::vector<TPostEntry> wrs; //is used just to post wr
-        wrs.resize(srqInitAttr.attr.max_wr);
 
-        Slots.reserve(srqInitAttr.attr.max_wr);
+        const ui64 maxWr = srqInitAttr.attr.max_wr;
+        if (maxWr == 0) {
+            Destroy();
+            return EINVAL;
+        }
+        std::vector<TPostEntry> wrs(maxWr); //is used just to post wr
 
-        wrs[0].Wr.wr_id = SRQ_WR_MASK;
+        Slots.reserve(maxWr);
 
-        for (ui64 i = 1; i < srqInitAttr.attr.max_wr; i++) {
-            //Slots.emplace_back(Args &&args...) create slot here
+        for (ui64 i = 0; i < maxWr; i++) {
+            auto buffer = memPool->AllocRcBuf(params.RecieveBufSz, IMemPool::EMPTY);
+            if (!buffer) {
+                Destroy();
+                return ENOMEM;
+            }
+            Slots.emplace_back(TRecieveSlot{std::move(*buffer)});
             auto region = TryExtractFromRcBuf(Slots.back().Buffer);
+            if (region.Empty()) {
+                Destroy();
+                return EINVAL;
+            }
             wrs[i].Wr.wr_id = SRQ_WR_MASK | i;
             wrs[i].Sg.addr = reinterpret_cast<ui64>(region.GetAddr());
             wrs[i].Sg.length = region.GetSize();
             wrs[i].Sg.lkey = region.GetLKey(ctx->GetDeviceIndex());
             wrs[i].Wr.sg_list = &wrs[i].Sg;
             wrs[i].Wr.num_sge = 1;
-            wrs[i - 1].Wr.next = &wrs[i].Wr;
+            wrs[i].Wr.next = i + 1 < maxWr ? &wrs[i + 1].Wr : nullptr;
         }
-
-        wrs[srqInitAttr.attr.max_wr - 1].Wr.next = nullptr;
 
         struct ibv_recv_wr *bad_wr = nullptr;
 
         if (int err = ibv_post_srq_recv(Srq, &wrs[0].Wr, &bad_wr)) {
 	        fprintf(stderr, "Error, ibv_post_srq_recv() failed\n");
+            Destroy();
 	        return err;
         }
 
 
         return 0;
     }
+
     void HandleWc(ibv_wc* wc) noexcept {
         ui64 id = wc->wr_id & ~SRQ_WR_MASK;
         Y_DEBUG_ABORT_UNLESS(id < Slots.size());
         TRecieveSlot& slot = Slots[id];
+        Y_UNUSED(slot);
+    }
+
+    struct TCmd {
+        ui32 QpNum;
+        enum ECmd {
+            RegQp,
+            DeregQp
+        } Cmd;
+    };
+
+    void EnqueueCmd(TCmd* cmd) {
+        Queue.Push(cmd);
+    }
+
+    void Destroy() noexcept {
+        if (Srq) {
+            ibv_destroy_srq(Srq);
+            Srq = nullptr;
+        }
+        Slots.clear();
+    }
+
+    ~TSrq() {
+        Destroy();
     }
 private:
     ibv_srq* Srq = nullptr;
     std::vector<TRecieveSlot> Slots;
+    NThreading::TReadAsFilledQueue<TCmd> Queue;
 };
 
 class TCqCommon : public ICq {
@@ -149,13 +195,13 @@ public:
         return Srq.Get();
     }
 
-    int Init(const TRdmaCtx* ctx, const TRdmaRuntimeParams& params, struct ibv_comp_channel* ch) noexcept {
+    int Init(const TRdmaCtx* ctx, const TRdmaRuntimeParams& params, std::shared_ptr<IMemPool> memPool, struct ibv_comp_channel* ch) noexcept {
         Cq = ibv_create_cq(ctx->GetContext(), params.MaxCqe, nullptr, ch, 0);
         if (!Cq) {
             return errno;
         }
         if (params.MaxSrqWr > 0) {
-            if (auto err = Srq.Init(ctx, params)) {
+            if (auto err = Srq.Init(ctx, params, std::move(memPool))) {
                 return err;
             }
         }
@@ -171,9 +217,20 @@ public:
     }
 
     void DestroyCq () noexcept {
+        Srq.Destroy();
         if (Cq) {
             ibv_destroy_cq(Cq);
         }
+    }
+
+    virtual void RegisterQpAsync(ui32 qpNum) noexcept {
+        auto cmd = new TSrq::TCmd{qpNum, TSrq::TCmd::RegQp};
+        Srq.EnqueueCmd(cmd);
+    }
+
+    virtual void DeregisterQpAsync(ui32 qpNum) noexcept {
+        auto cmd = new TSrq::TCmd{qpNum, TSrq::TCmd::DeregQp};
+        Srq.EnqueueCmd(cmd);
     }
 protected:
     NActors::TActorSystem* const As;
@@ -256,7 +313,7 @@ private:
 };
 
 template<class TCq>
-static ICq::TPtr CreateCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaRuntimeParams runtimeParams, NMonitoring::TDynamicCounters* counter) noexcept {
+static ICq::TPtr CreateCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaRuntimeParams runtimeParams, std::shared_ptr<IMemPool> memPool, NMonitoring::TDynamicCounters* counter) noexcept {
     const ibv_device_attr& attr = ctx->GetDevAttr();
     if (runtimeParams.MaxCqe <= 0) {
         runtimeParams.MaxCqe = attr.max_cqe;
@@ -277,7 +334,7 @@ static ICq::TPtr CreateCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaR
     }
 
     auto p = std::make_shared<TCq>(as, runtimeParams.MaxWr, counter);
-    int err = p->Init(ctx, runtimeParams);
+    int err = p->Init(ctx, runtimeParams, std::move(memPool));
     if (err) {
         return nullptr;
     }
