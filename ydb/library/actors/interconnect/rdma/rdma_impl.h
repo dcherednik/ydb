@@ -63,6 +63,27 @@ private:
 
 void SetSigHandler() noexcept;
 
+class TSrq {
+public:
+    ibv_srq* Get() noexcept { return Srq; }
+
+    int Init(const TRdmaCtx* ctx, const TRdmaRuntimeParams& params) noexcept {
+        struct ibv_srq_init_attr srqInitAttr;
+        memset(&srqInitAttr, 0, sizeof(srqInitAttr));
+
+        srqInitAttr.attr.max_wr = params.MaxSrqWr;
+        srqInitAttr.attr.max_sge = 1;
+
+        Srq = ibv_create_srq(ctx->GetProtDomain(), &srqInitAttr);
+        if (!Srq) {
+            return errno;
+        }
+        return 0;
+    }
+private:
+    ibv_srq* Srq = nullptr;
+};
+
 class TCqCommon : public ICq {
 public:
     TCqCommon(NActors::TActorSystem* as)
@@ -78,10 +99,19 @@ public:
         return Cq;
     }
 
-    int Init(const TRdmaCtx* ctx, int maxCqe, struct ibv_comp_channel* ch) noexcept {
-        Cq = ibv_create_cq(ctx->GetContext(), maxCqe, nullptr, ch, 0);
+    ibv_srq* GetSrq() noexcept {
+        return Srq.Get();
+    }
+
+    int Init(const TRdmaCtx* ctx, const TRdmaRuntimeParams& params, struct ibv_comp_channel* ch) noexcept {
+        Cq = ibv_create_cq(ctx->GetContext(), params.MaxCqe, nullptr, ch, 0);
         if (!Cq) {
             return errno;
+        }
+        if (params.MaxSrqWr > 0) {
+            if (auto err = Srq.Init(ctx, params)) {
+                return err;
+            }
         }
         return 0;
     }
@@ -102,6 +132,7 @@ public:
 protected:
     NActors::TActorSystem* const As;
     ibv_cq* Cq;
+    TSrq Srq;
 };
 
 class TWr : public ICq::IWr {
@@ -179,16 +210,16 @@ private:
 };
 
 template<class TCq>
-static ICq::TPtr CreateCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, int maxCqe, int maxWr, NMonitoring::TDynamicCounters* counter) noexcept {
-    if (maxCqe <= 0) {
+static ICq::TPtr CreateCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaRuntimeParams runtimeParams, NMonitoring::TDynamicCounters* counter) noexcept {
+    if (runtimeParams.MaxCqe <= 0) {
         const ibv_device_attr& attr = ctx->GetDevAttr();
-        maxCqe = attr.max_cqe;
+        runtimeParams.MaxCqe = attr.max_cqe;
     }
-    if (maxWr <= 0) {
-        maxWr = maxCqe;
+    if (runtimeParams.MaxWr <= 0) {
+        runtimeParams.MaxWr = runtimeParams.MaxCqe;
     }
-    auto p = std::make_shared<TCq>(as, maxWr, counter);
-    int err = p->Init(ctx, maxCqe);
+    auto p = std::make_shared<TCq>(as, runtimeParams.MaxWr, counter);
+    int err = p->Init(ctx, runtimeParams);
     if (err) {
         return nullptr;
     }

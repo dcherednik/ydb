@@ -41,8 +41,8 @@ public:
         : TSimpleCqBase(as, sz, c, true)
     {}
 
-    int Init(const TRdmaCtx* ctx, int maxCqe) noexcept {
-        return TSimpleCqBase::Init(ctx, maxCqe, nullptr);
+    int Init(const TRdmaCtx* ctx, const TRdmaRuntimeParams& params) noexcept {
+        return TSimpleCqBase::Init(ctx, params, nullptr);
     }
 
     virtual ~TSimpleCq() {
@@ -61,13 +61,13 @@ public:
         : TSimpleCqBase(as, sz, c, false)
     {}
 
-    int Init(const TRdmaCtx* ctx, int maxCqe) noexcept {
+    int Init(const TRdmaCtx* ctx, const TRdmaRuntimeParams& params) noexcept {
         CompChannel = ibv_create_comp_channel(ctx->GetContext());
         if (!CompChannel) {
             return errno;
         }
 
-        int err = TSimpleCqBase::Init(ctx, maxCqe, CompChannel);
+        int err = TSimpleCqBase::Init(ctx, params, CompChannel);
         if (err) {
             return err;
         }
@@ -144,12 +144,12 @@ private:
     ibv_comp_channel* CompChannel;
 };
 
-ICq::TPtr CreateSimpleCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, int maxCqe, int maxWr, NMonitoring::TDynamicCounters* counter) noexcept {
-    return CreateCq<TSimpleCq>(ctx, as, maxCqe, maxWr, counter);
+ICq::TPtr CreateSimpleCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaRuntimeParams runtimeParams, NMonitoring::TDynamicCounters* counter) noexcept {
+    return CreateCq<TSimpleCq>(ctx, as, runtimeParams, counter);
 }
 
-ICq::TPtr CreateSimpleEventDrivenCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, int maxCqe, int maxWr, NMonitoring::TDynamicCounters* counter) noexcept {
-    return CreateCq<TSimpleEventDrivenCq>(ctx, as, maxCqe, maxWr, counter);
+ICq::TPtr CreateSimpleEventDrivenCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaRuntimeParams runtimeParams, NMonitoring::TDynamicCounters* counter) noexcept {
+    return CreateCq<TSimpleEventDrivenCq>(ctx, as, runtimeParams, counter);
 }
 
 const int TQueuePair::UnknownQpState = IBV_QPS_UNKNOWN;

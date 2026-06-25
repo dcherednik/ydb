@@ -250,16 +250,16 @@ private:
     std::shared_ptr<NInterconnect::NRdma::IMemPool> MemPool;
 };
 
-NActors::IActor* CreateCqActor(int maxCqe, int maxWr, ECqMode mode, NMonitoring::TDynamicCounters* counters) {
+NActors::IActor* CreateCqActor(const TRdmaRuntimeParams& runtimeParams, ECqMode mode, NMonitoring::TDynamicCounters* counters) {
     switch (mode) {
         case NInterconnect::NRdma::ECqMode::POLLING:
-            return new TCqActor([maxCqe, maxWr, counters](const TRdmaCtx* ctx) {
-                return CreateSimpleCq(ctx, TlsActivationContext->AsActorContext().ActorSystem(), maxCqe, maxWr, counters);
+            return new TCqActor([runtimeParams, counters](const TRdmaCtx* ctx) {
+                return CreateSimpleCq(ctx, TlsActivationContext->AsActorContext().ActorSystem(), runtimeParams, counters);
             });
 
         case NInterconnect::NRdma::ECqMode::EVENT:
-            return new TCqActor([maxCqe, maxWr, counters](const TRdmaCtx* ctx) {
-                return CreateSimpleEventDrivenCq(ctx, TlsActivationContext->AsActorContext().ActorSystem(), maxCqe, maxWr, counters);
+            return new TCqActor([runtimeParams, counters](const TRdmaCtx* ctx) {
+                return CreateSimpleEventDrivenCq(ctx, TlsActivationContext->AsActorContext().ActorSystem(), runtimeParams, counters);
             });
     }
 }

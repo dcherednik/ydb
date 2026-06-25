@@ -8,6 +8,7 @@
 
 struct ibv_qp;
 struct ibv_cq;
+struct ibv_srq;
 struct ibv_wc;
 union ibv_gid;
 struct ibv_send_wr;
@@ -33,6 +34,12 @@ struct TEvRdmaIoDone;
 class TQueuePair;
 class IIbVerbsBuilder;
 
+struct TRdmaRuntimeParams {
+    int MaxCqe;   // max capacity of single queue under CQ actor abstruction. -1 - use limit from rdma context
+    int MaxWr;    // max number of work request in the pool (for READ verbs)
+    int MaxSrqWr; // max number of work request for shared recieve queue
+    int RecieveBufSz; // Size of one wr buffer
+};
 
 // Wrapper for ibv Completion Queue
 // Hides logic to controll work request count
@@ -51,6 +58,7 @@ public:
     using TPtr = std::shared_ptr<ICq>;
     virtual ~ICq() = default;
     virtual ibv_cq* GetCq() noexcept = 0;
+    virtual ibv_srq* GetSrq() noexcept = 0;
 
     struct TBusy {}; // try later
     struct TErr {};  // fatal error, cq must be recreated. All associated qp failed.
@@ -78,8 +86,8 @@ private:
     virtual void NotifyErr() noexcept = 0;
 };
 
-ICq::TPtr CreateSimpleCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, int maxCqe, int maxWr, NMonitoring::TDynamicCounters* counter) noexcept;
-ICq::TPtr CreateSimpleEventDrivenCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, int maxCqe, int maxWr, NMonitoring::TDynamicCounters* counter) noexcept;
+ICq::TPtr CreateSimpleCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaRuntimeParams runtimeParams, NMonitoring::TDynamicCounters* counter) noexcept;
+ICq::TPtr CreateSimpleEventDrivenCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaRuntimeParams runtimeParams, NMonitoring::TDynamicCounters* counter) noexcept;
 
 struct THandshakeData {
     ui32 QpNum;
