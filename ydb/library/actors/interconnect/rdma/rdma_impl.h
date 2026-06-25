@@ -3,6 +3,7 @@
 #include "ctx.h"
 #include "events.h"
 #include "rdma.h"
+#include "mem_pool.h"
 
 #include <contrib/libs/ibdrv/include/infiniband/verbs.h>
 #include <ydb/library/actors/core/actorsystem.h>
@@ -64,7 +65,12 @@ private:
 void SetSigHandler() noexcept;
 
 class TSrq {
+    struct TRecieveSlot {
+        TRcBuf Buffer;
+    };
+    
 public:
+    static constexpr ui64 SRQ_WR_MASK = 1ull << 63;
     ibv_srq* Get() noexcept { return Srq; }
 
     int Init(const TRdmaCtx* ctx, const TRdmaRuntimeParams& params) noexcept {
@@ -78,10 +84,50 @@ public:
         if (!Srq) {
             return errno;
         }
+
+        struct TPostEntry {
+            ibv_recv_wr Wr;
+            ibv_sge Sg;
+        };
+        std::vector<TPostEntry> wrs; //is used just to post wr
+        wrs.resize(srqInitAttr.attr.max_wr);
+
+        Slots.reserve(srqInitAttr.attr.max_wr);
+
+        wrs[0].Wr.wr_id = SRQ_WR_MASK;
+
+        for (ui64 i = 1; i < srqInitAttr.attr.max_wr; i++) {
+            //Slots.emplace_back(Args &&args...) create slot here
+            auto region = TryExtractFromRcBuf(Slots.back().Buffer);
+            wrs[i].Wr.wr_id = SRQ_WR_MASK | i;
+            wrs[i].Sg.addr = reinterpret_cast<ui64>(region.GetAddr());
+            wrs[i].Sg.length = region.GetSize();
+            wrs[i].Sg.lkey = region.GetLKey(ctx->GetDeviceIndex());
+            wrs[i].Wr.sg_list = &wrs[i].Sg;
+            wrs[i].Wr.num_sge = 1;
+            wrs[i - 1].Wr.next = &wrs[i].Wr;
+        }
+
+        wrs[srqInitAttr.attr.max_wr - 1].Wr.next = nullptr;
+
+        struct ibv_recv_wr *bad_wr = nullptr;
+
+        if (int err = ibv_post_srq_recv(Srq, &wrs[0].Wr, &bad_wr)) {
+	        fprintf(stderr, "Error, ibv_post_srq_recv() failed\n");
+	        return err;
+        }
+
+
         return 0;
+    }
+    void HandleWc(ibv_wc* wc) noexcept {
+        ui64 id = wc->wr_id & ~SRQ_WR_MASK;
+        Y_DEBUG_ABORT_UNLESS(id < Slots.size());
+        TRecieveSlot& slot = Slots[id];
     }
 private:
     ibv_srq* Srq = nullptr;
+    std::vector<TRecieveSlot> Slots;
 };
 
 class TCqCommon : public ICq {
@@ -211,13 +257,25 @@ private:
 
 template<class TCq>
 static ICq::TPtr CreateCq(const TRdmaCtx* ctx, NActors::TActorSystem* as, TRdmaRuntimeParams runtimeParams, NMonitoring::TDynamicCounters* counter) noexcept {
+    const ibv_device_attr& attr = ctx->GetDevAttr();
     if (runtimeParams.MaxCqe <= 0) {
-        const ibv_device_attr& attr = ctx->GetDevAttr();
         runtimeParams.MaxCqe = attr.max_cqe;
+    }
+    if (runtimeParams.MaxSrqWr < 0) {
+        runtimeParams.MaxSrqWr = attr.max_srq_wr;
     }
     if (runtimeParams.MaxWr <= 0) {
         runtimeParams.MaxWr = runtimeParams.MaxCqe;
     }
+
+    if (runtimeParams.MaxSrqWr > 0) {
+        if (attr.max_srq <= 0 || attr.max_srq_wr <= 0 || attr.max_srq_sge < 1) {
+            return nullptr; // or fail CQ creation
+        }
+
+        runtimeParams.MaxSrqWr = Min(runtimeParams.MaxSrqWr, attr.max_srq_wr);
+    }
+
     auto p = std::make_shared<TCq>(as, runtimeParams.MaxWr, counter);
     int err = p->Init(ctx, runtimeParams);
     if (err) {
@@ -422,13 +480,19 @@ public:
         }
     }
 
+
+
     void HandleWc(ibv_wc* wc, size_t sz) noexcept {
         for (size_t i = 0; i < sz; i++, wc++) {
-            TWr* wr = &WrBuf[wc->wr_id];
-            double passed = wr->GetTimePassed();
-            RdmaDeviceVerbTimeUs->Collect(passed * 1000000.0);
-            wr->Reply(As, wc);
-            ReturnWr(wr);
+            if (wc->wr_id & TSrq::SRQ_WR_MASK) {
+                Srq.HandleWc(wc);
+            } else {
+                TWr* wr = &WrBuf[wc->wr_id];
+                double passed = wr->GetTimePassed();
+                RdmaDeviceVerbTimeUs->Collect(passed * 1000000.0);
+                wr->Reply(As, wc);
+                ReturnWr(wr);
+            }
         }
     }
 
