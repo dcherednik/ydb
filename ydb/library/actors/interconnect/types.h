@@ -63,6 +63,7 @@ namespace NActors {
         bool UseRdma = {};
         bool ChecksumRdmaEvent = {};
         bool AllowDisablingPayloadChecksums = {};
+        bool AllowRdmaSendReceive = {};
         TString AuthCN;
         NActors::TScopeId PeerScopeId;
     };

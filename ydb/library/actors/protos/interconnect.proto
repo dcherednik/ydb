@@ -66,6 +66,7 @@ message TRdmaHandshake {
     }
     // Perform additional software checksum for rdma events
     optional bool RdmaChecksum = 11;
+    optional bool SendReceiveCompat = 12;
 }
 
 message TRdmaHandshakeReadAck {

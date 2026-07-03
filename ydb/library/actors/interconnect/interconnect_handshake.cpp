@@ -993,6 +993,9 @@ namespace NActors {
                     rdmaHs->SetInterfaceId(hd.InterfaceId);
                     rdmaHs->SetMtuIndex(hd.MtuIndex);
                     rdmaHs->SetRdmaChecksum(Common->Settings.RdmaChecksum);
+                    if (Common->Settings.EnableRdmaSendReceive) {
+                        rdmaHs->SetSendReceiveCompat(true);
+                    }
                     if (auto region = SetupRdmaHandshakeRegion(*rdmaHs)) {
                         Rdma.HandShakeMemRegion = std::move(region);
                     } else {
@@ -1082,6 +1085,7 @@ namespace NActors {
                             Rdma.Clear();
                         } else {
                             Params.ChecksumRdmaEvent = remoteQpPrepared.GetRdmaChecksum();
+                            Params.AllowRdmaSendReceive = Common->Settings.EnableRdmaSendReceive && remoteQpPrepared.GetSendReceiveCompat();
                         }
                     } else {
                         LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_ERROR,
@@ -1406,14 +1410,20 @@ namespace NActors {
 
                     if (rdmaIncommingHandshake) {
                         TryRdmaQpExchange(rdmaIncommingHandshake.value(), success);
-                        if (Rdma && rdmaIncommingHandshake->HasRead()) {
-                            rdma = rdmaIncommingHandshake->GetRead();
-                            if (rdmaIncommingHandshake->HasRdmaChecksum() && rdmaIncommingHandshake->GetRdmaChecksum() == true) {
-                                Params.ChecksumRdmaEvent = Common->Settings.RdmaChecksum;
-                                success.MutableQpPrepared()->SetRdmaChecksum(Params.ChecksumRdmaEvent);
-                            } else {
-                                Params.ChecksumRdmaEvent = false;
-                                success.MutableQpPrepared()->SetRdmaChecksum(false);
+                        if (Rdma) {
+                            if (rdmaIncommingHandshake->HasRead()) {
+                                rdma = rdmaIncommingHandshake->GetRead();
+                                if (rdmaIncommingHandshake->HasRdmaChecksum() && rdmaIncommingHandshake->GetRdmaChecksum() == true) {
+                                    Params.ChecksumRdmaEvent = Common->Settings.RdmaChecksum;
+                                    success.MutableQpPrepared()->SetRdmaChecksum(Params.ChecksumRdmaEvent);
+                                } else {
+                                    Params.ChecksumRdmaEvent = false;
+                                    success.MutableQpPrepared()->SetRdmaChecksum(false);
+                                }
+                            }
+                            if (Common->Settings.EnableRdmaSendReceive && rdmaIncommingHandshake->GetSendReceiveCompat()) {
+                                Params.AllowRdmaSendReceive = true;
+                                success.MutableQpPrepared()->SetSendReceiveCompat(true);
                             }
                         } else {
                             success.SetRdmaErr("Unable to perform qp exchange on the incomming side");
