@@ -28,6 +28,11 @@ namespace NActors {
     static constexpr ui32 StackSize = 64 * 1024; // 64k should be enough
 
     static constexpr size_t RdmaHandshakeRegionSize = 4096;
+    static constexpr ui32 RdmaSendReceiveVersion = 1;
+
+    static bool IsRdmaSendReceiveVersionSupported(ui32 version) noexcept {
+        return version == RdmaSendReceiveVersion;
+    }
 
     namespace {
         class THandshakeActorCreateTimer {
@@ -996,6 +1001,9 @@ namespace NActors {
                     rdmaHs->SetInterfaceId(hd.InterfaceId);
                     rdmaHs->SetMtuIndex(hd.MtuIndex);
                     rdmaHs->SetRdmaChecksum(Common->Settings.RdmaChecksum);
+                    if (Common->Settings.EnableRdmaSendReceive) {
+                        rdmaHs->SetSendReceiveVersion(RdmaSendReceiveVersion);
+                    }
                     if (auto region = SetupRdmaHandshakeRegion(*rdmaHs)) {
                         Rdma.HandShakeMemRegion = std::move(region);
                     } else {
@@ -1086,6 +1094,8 @@ namespace NActors {
                             Rdma.Clear();
                         } else {
                             Params.ChecksumRdmaEvent = remoteQpPrepared.GetRdmaChecksum();
+                            Params.AllowRdmaSendReceive = Common->Settings.EnableRdmaSendReceive
+                                && IsRdmaSendReceiveVersionSupported(remoteQpPrepared.GetSendReceiveVersion());
                         }
                     } else {
                         LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_ERROR,
@@ -1413,14 +1423,21 @@ namespace NActors {
 
                     if (rdmaIncommingHandshake) {
                         TryRdmaQpExchange(rdmaIncommingHandshake.value(), success);
-                        if (Rdma && rdmaIncommingHandshake->HasRead()) {
-                            rdma = rdmaIncommingHandshake->GetRead();
-                            if (rdmaIncommingHandshake->HasRdmaChecksum() && rdmaIncommingHandshake->GetRdmaChecksum() == true) {
-                                Params.ChecksumRdmaEvent = Common->Settings.RdmaChecksum;
-                                success.MutableQpPrepared()->SetRdmaChecksum(Params.ChecksumRdmaEvent);
-                            } else {
-                                Params.ChecksumRdmaEvent = false;
-                                success.MutableQpPrepared()->SetRdmaChecksum(false);
+                        if (Rdma) {
+                            if (rdmaIncommingHandshake->HasRead()) {
+                                rdma = rdmaIncommingHandshake->GetRead();
+                                if (rdmaIncommingHandshake->HasRdmaChecksum() && rdmaIncommingHandshake->GetRdmaChecksum() == true) {
+                                    Params.ChecksumRdmaEvent = Common->Settings.RdmaChecksum;
+                                    success.MutableQpPrepared()->SetRdmaChecksum(Params.ChecksumRdmaEvent);
+                                } else {
+                                    Params.ChecksumRdmaEvent = false;
+                                    success.MutableQpPrepared()->SetRdmaChecksum(false);
+                                }
+                            }
+                            if (Common->Settings.EnableRdmaSendReceive
+                                    && IsRdmaSendReceiveVersionSupported(rdmaIncommingHandshake->GetSendReceiveVersion())) {
+                                Params.AllowRdmaSendReceive = true;
+                                success.MutableQpPrepared()->SetSendReceiveVersion(RdmaSendReceiveVersion);
                             }
                         } else {
                             success.SetRdmaErr("Unable to perform qp exchange on the incomming side");
