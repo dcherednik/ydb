@@ -50,6 +50,8 @@ SRCS(
     packet.cpp
     packet.h
     profiler.h
+    rdma_handshake.cpp
+    rdma_handshake.h
     slowpoke_actor.h
     subscription_manager.cpp
     subscription_manager.h

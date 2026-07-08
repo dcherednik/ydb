@@ -66,13 +66,22 @@ message TRdmaHandshake {
     }
     // Perform additional software checksum for rdma events
     optional bool RdmaChecksum = 11;
-    optional bool SendReceiveCompat = 12;
+    // RDMA SEND/RECEIVE handshake protocol version; missing or zero means unsupported.
+    // This field used to be bool SendReceiveCompat, keep the field number to preserve varint wire compatibility.
+    optional uint32 SendReceiveVersion = 12;
 }
 
 message TRdmaHandshakeReadAck {
     oneof Status {
         fixed32 Digest = 1; // set in case of OK, contains checksum of read RDMA region
         string Err = 2;     // set in case of error, contains explanation of remote read error
+    }
+}
+
+message TRdmaHandshakeSendReceiveAck {
+    oneof Status {
+        bool Ok = 1;
+        string Err = 2;
     }
 }
 

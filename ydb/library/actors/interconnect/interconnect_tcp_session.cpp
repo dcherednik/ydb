@@ -16,6 +16,23 @@
 namespace NActors {
     LWTRACE_USING(ACTORLIB_PROVIDER);
 
+    static NInterconnect::NRdma::TEvRdmaIoReceiveDone* RecreateRdmaReceiveDone(
+            NInterconnect::NRdma::TEvRdmaIoReceiveDone* ev)
+    {
+        using TEvRdmaIoReceiveDone = NInterconnect::NRdma::TEvRdmaIoReceiveDone;
+
+        if (ev->IsSuccess()) {
+            auto& success = std::get<TEvRdmaIoReceiveDone::TSuccess>(ev->Record);
+            return TEvRdmaIoReceiveDone::Success(std::move(success.Buf));
+        } else if (ev->IsWcError()) {
+            return TEvRdmaIoReceiveDone::WcError(ev->GetErrCode());
+        } else if (ev->IsWrError()) {
+            return TEvRdmaIoReceiveDone::WrError(ev->GetErrCode());
+        } else {
+            return TEvRdmaIoReceiveDone::CqError();
+        }
+    }
+
     template<typename T>
     T Coalesce(T&& x) {
         return x;
@@ -122,6 +139,52 @@ namespace NActors {
         return Params.UseRdma || RdmaQp || RdmaInflightDataAmount;
     }
 
+    bool TInterconnectSessionTCP::PrepareRdmaHandshake(TActorId handshakeActorId,
+            NInterconnect::NRdma::TQueuePair::TPtr qp, NInterconnect::NRdma::ICq::TPtr cq)
+    {
+        Y_ABORT_UNLESS(handshakeActorId);
+        Y_ABORT_UNLESS(qp);
+        Y_ABORT_UNLESS(cq);
+
+        if (RdmaReceiveCq || RdmaReceiveQpNum || RdmaHandshakeActorId) {
+            LOG_ERROR_IC_SESSION("ICRDMA", "duplicate RDMA handshake prepare");
+            return false;
+        }
+
+        const ui32 qpNum = qp->GetQpNum();
+        if (!cq->RegisterQpAsync(qpNum, SelfId())) {
+            LOG_ERROR_IC_SESSION("ICRDMA", "unable to register QP for RDMA handshake receive QpNum# %" PRIu32, qpNum);
+            return false;
+        }
+
+        RdmaQp = std::move(qp);
+        RdmaReceiveCq = std::move(cq);
+        RdmaReceiveQpNum = qpNum;
+        RdmaHandshakeActorId = handshakeActorId;
+        return true;
+    }
+
+    void TInterconnectSessionTCP::AbortPreparedRdmaHandshake() {
+        if (RdmaQp) {
+            RdmaQp->ToErrorState();
+        }
+        if (RdmaReceiveCq && RdmaReceiveQpNum) {
+            RdmaReceiveCq->DeregisterQpAsync(RdmaReceiveQpNum);
+        }
+        RdmaReceiveCq.reset();
+        RdmaReceiveQpNum = 0;
+        RdmaHandshakeActorId = TActorId();
+        PendingRdmaReceives.clear();
+        RdmaQp.reset();
+        ReceiveContext->Terminated = true;
+        SendUpdateToWhiteboard(false);
+        TActor::PassAway();
+    }
+
+    void TInterconnectSessionTCP::CompleteRdmaHandshake() {
+        RdmaHandshakeActorId = TActorId();
+    }
+
     void TInterconnectSessionTCP::Handle(TEvTerminate::TPtr& ev) {
         Terminate(ev->Get()->Reason);
     }
@@ -136,6 +199,11 @@ namespace NActors {
         // Move RdmaQp to the error state to prevent read our memory from the peer side after possible desctuction events
         if (RdmaQp) {
             RdmaQp->ToErrorState();
+        }
+        if (RdmaReceiveCq && RdmaReceiveQpNum) {
+            RdmaReceiveCq->DeregisterQpAsync(RdmaReceiveQpNum);
+            RdmaReceiveCq.reset();
+            RdmaReceiveQpNum = 0;
         }
 
         IActor::InvokeOtherActor(*Proxy, &TInterconnectProxyTCP::UnregisterSession, this);
@@ -360,15 +428,32 @@ namespace NActors {
         NewConnectionSet = TActivationContext::Now();
         BytesWrittenToSocket = 0;
 
+        Params = ev->Get()->Params;
         SendBufferSize = ev->Get()->Socket->GetSendBufferSize();
         Socket = std::move(ev->Get()->Socket);
         XdcSocket = std::move(ev->Get()->XdcSocket);
 
         NInterconnect::NRdma::ICq::TPtr cq;
-        RdmaQp.reset();
         if (auto rdmaSuccess = ev->Get()->RdmaHanshakeResult.GetOk()) {
             cq = std::move(rdmaSuccess->RdmaCq);
             RdmaQp = std::move(rdmaSuccess->RdmaQp);
+            if (!RdmaReceiveCq && Params.AllowRdmaSendReceive) {
+                RdmaReceiveCq = cq;
+                RdmaReceiveQpNum = RdmaQp->GetQpNum();
+                if (!RdmaReceiveCq->RegisterQpAsync(RdmaReceiveQpNum, SelfId())) {
+                    LOG_ERROR_IC_SESSION("ICRDMA", "unable to register QP receive mapping QpNum# %" PRIu32,
+                        RdmaReceiveQpNum);
+                    Terminate(TDisconnectReason::RdmaError());
+                    return;
+                }
+            }
+        } else {
+            if (RdmaReceiveCq && RdmaReceiveQpNum) {
+                RdmaReceiveCq->DeregisterQpAsync(RdmaReceiveQpNum);
+                RdmaReceiveCq.reset();
+                RdmaReceiveQpNum = 0;
+            }
+            RdmaQp.reset();
         }
 
         if (XdcSocket) {
@@ -405,6 +490,11 @@ namespace NActors {
         auto actor = MakeHolder<TInputSessionTCP>(SelfId(), Socket, XdcSocket, ReceiveContext, Proxy->Common,
             Proxy->Metrics, Proxy->PeerNodeId, nextPacket, GetDeadPeerTimeout(), std::move(inputSessionParams), RdmaQp, std::move(cq));
         ReceiverId = RegisterWithSameMailbox(actor.Release());
+        RdmaHandshakeActorId = TActorId();
+        while (!PendingRdmaReceives.empty()) {
+            Send(ReceiverId, PendingRdmaReceives.front().release());
+            PendingRdmaReceives.pop_front();
+        }
 
         // register our socket with the appropriate I/O backend
         if (Proxy->Common->Settings.UseUring && !Params.Encryption && TUringContext::IsSupported()) {
@@ -515,6 +605,20 @@ namespace NActors {
                 Send(ev->Sender, new TEvConfirmUpdate);
             }
         }
+    }
+
+    void TInterconnectSessionTCP::Handle(NInterconnect::NRdma::TEvRdmaIoReceiveDone::TPtr& ev) {
+        if (RdmaHandshakeActorId) {
+            Send(RdmaHandshakeActorId, RecreateRdmaReceiveDone(ev->Get()));
+            return;
+        }
+
+        if (ReceiverId) {
+            Send(ReceiverId, RecreateRdmaReceiveDone(ev->Get()));
+            return;
+        }
+
+        PendingRdmaReceives.emplace_back(RecreateRdmaReceiveDone(ev->Get()));
     }
 
     void TInterconnectSessionTCP::IssueRam(bool batching) {

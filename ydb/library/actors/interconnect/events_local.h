@@ -408,4 +408,69 @@ namespace NActors {
             , Socket(std::move(socket))
         {}
     };
+
+    struct TEvPrepareRdmaHandshake : TEventLocal<TEvPrepareRdmaHandshake, (ui32)ENetwork::EvPrepareRdmaHandshake> {
+        TActorId Self;
+        TActorId Peer;
+        TSessionParams Params;
+        NInterconnect::NRdma::TQueuePair::TPtr Qp;
+        NInterconnect::NRdma::ICq::TPtr Cq;
+
+        TEvPrepareRdmaHandshake(
+                TActorId self,
+                TActorId peer,
+                TSessionParams params,
+                NInterconnect::NRdma::TQueuePair::TPtr qp,
+                NInterconnect::NRdma::ICq::TPtr cq)
+            : Self(self)
+            , Peer(peer)
+            , Params(std::move(params))
+            , Qp(std::move(qp))
+            , Cq(std::move(cq))
+        {}
+    };
+
+    struct TEvPrepareRdmaHandshakeResult : TEventLocal<TEvPrepareRdmaHandshakeResult, (ui32)ENetwork::EvPrepareRdmaHandshakeResult> {
+        TString Error;
+
+        TEvPrepareRdmaHandshakeResult() = default;
+
+        explicit TEvPrepareRdmaHandshakeResult(TString error)
+            : Error(std::move(error))
+        {}
+
+        explicit operator bool() const noexcept {
+            return Error.empty();
+        }
+    };
+
+    struct TEvCompleteRdmaHandshake : TEventLocal<TEvCompleteRdmaHandshake, (ui32)ENetwork::EvCompleteRdmaHandshake> {
+    };
+
+    struct TEvCompleteRdmaHandshakeResult : TEventLocal<TEvCompleteRdmaHandshakeResult, (ui32)ENetwork::EvCompleteRdmaHandshakeResult> {
+        TString Error;
+
+        TEvCompleteRdmaHandshakeResult() = default;
+
+        explicit TEvCompleteRdmaHandshakeResult(TString error)
+            : Error(std::move(error))
+        {}
+
+        explicit operator bool() const noexcept {
+            return Error.empty();
+        }
+    };
+
+    struct TEvAbortRdmaHandshake : TEventLocal<TEvAbortRdmaHandshake, (ui32)ENetwork::EvAbortRdmaHandshake> {
+    };
+
+    struct TEvRdmaHandshakeResult : TEventLocal<TEvRdmaHandshakeResult, (ui32)ENetwork::EvRdmaHandshakeResult> {
+        bool Success = false;
+        TString Error;
+
+        TEvRdmaHandshakeResult(bool success, TString error = {})
+            : Success(success)
+            , Error(std::move(error))
+        {}
+    };
 }

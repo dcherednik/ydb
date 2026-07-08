@@ -264,6 +264,7 @@ namespace NActors {
             hFunc(TEvPollerReady, Handle)
             hFunc(TEvPollerRegisterResult, Handle)
             hFunc(NInterconnect::NRdma::TEvRdmaReadDone, Handle)
+            hFunc(NInterconnect::NRdma::TEvRdmaIoReceiveDone, Handle)
             cFunc(EvResumeReceiveData, ReceiveData)
             cFunc(TEvInterconnect::TEvCloseInputSession::EventType, CloseInputSession)
             cFunc(EvCheckDeadPeer, HandleCheckDeadPeer)
@@ -361,6 +362,7 @@ namespace NActors {
         void Handle(TEvUringRegisterResult::TPtr& ev);
         void HandleConfirmUpdate();
         void Handle(NInterconnect::NRdma::TEvRdmaReadDone::TPtr& ev);
+        void Handle(NInterconnect::NRdma::TEvRdmaIoReceiveDone::TPtr& ev);
         void ReceiveData();
         void StartRecvUring();
         // XDC-over-io_uring receive helpers (Caveat 3).
@@ -509,6 +511,10 @@ namespace NActors {
         void CloseInputSession();
         bool IsRdmaInUse();
         bool HasRdmaState() const;
+        bool PrepareRdmaHandshake(TActorId handshakeActorId, NInterconnect::NRdma::TQueuePair::TPtr qp,
+            NInterconnect::NRdma::ICq::TPtr cq);
+        void CompleteRdmaHandshake();
+        void AbortPreparedRdmaHandshake();
 
         static TEvTerminate* NewEvTerminate(TDisconnectReason reason) {
             return new TEvTerminate(std::move(reason));
@@ -567,6 +573,7 @@ namespace NActors {
                 hFunc(TEvSocketDisconnect, OnDisconnect)
                 hFunc(TEvTerminate, Handle)
                 hFunc(TEvProcessPingRequest, Handle)
+                hFunc(NInterconnect::NRdma::TEvRdmaIoReceiveDone, Handle)
                 hFunc(TEvUringRegisterResult, Handle)
                 hFunc(TEvUringRegisterFailed, Handle)
                 hFunc(TEvUringWriteComplete, Handle)
@@ -576,6 +583,7 @@ namespace NActors {
         }
 
         void Handle(TEvUpdateFromInputSession::TPtr& ev);
+        void Handle(NInterconnect::NRdma::TEvRdmaIoReceiveDone::TPtr& ev);
 
         void OnDisconnect(TEvSocketDisconnect::TPtr& ev);
 
@@ -672,7 +680,7 @@ namespace NActors {
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-        const TSessionParams Params; // stable session template used for continuation handshakes
+        TSessionParams Params; // stable session template used for continuation handshakes
         // Runtime mode negotiated for the current socket; may differ from Params on reconnect.
         bool KernelLivenessMode = false;
         std::unique_ptr<TEventHolderPool> Pool;
@@ -814,6 +822,10 @@ namespace NActors {
 
         NInterconnect::TInterconnectZcProcessor ZcProcessor;
         NInterconnect::NRdma::TQueuePair::TPtr RdmaQp;
+        NInterconnect::NRdma::ICq::TPtr RdmaReceiveCq;
+        ui32 RdmaReceiveQpNum = 0;
+        TActorId RdmaHandshakeActorId;
+        std::deque<std::unique_ptr<NInterconnect::NRdma::TEvRdmaIoReceiveDone>> PendingRdmaReceives;
 
         void UpdateState(std::optional<EState> newState = std::nullopt) {
             if (!newState || *newState != State) {

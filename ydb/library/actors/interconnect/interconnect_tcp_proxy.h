@@ -11,6 +11,8 @@
 #include "interconnect_tcp_session.h"
 #include "profiler.h"
 
+#include <memory>
+
 #define ICPROXY_PROFILED TFunction func(*this, __func__, __LINE__)
 
 namespace NActors {
@@ -137,6 +139,9 @@ namespace NActors {
                 cFunc(EvPassAwayIfNeeded, HandlePassAwayIfNeeded)                               \
                 hFunc(TEvSubscribeForConnection, Handle);                                       \
                 hFunc(TEvReportConnection, Handle);                                             \
+                hFunc(TEvPrepareRdmaHandshake, Handle);                                         \
+                hFunc(TEvCompleteRdmaHandshake, Handle);                                        \
+                hFunc(TEvAbortRdmaHandshake, Handle);                                           \
                 fFunc(EvRdmaPendingHandshake, HandleRdmaDelayedHandshake)                       \
                 default:                                                                        \
                     Y_ABORT("unexpected event Type# 0x%08" PRIx32, type);                       \
@@ -424,6 +429,9 @@ namespace NActors {
         void HandlePoisonSession();
 
         void HandleSessionBufferSizeRequest(TEvSessionBufferSizeRequest::TPtr& ev);
+        void Handle(TEvPrepareRdmaHandshake::TPtr& ev);
+        void Handle(TEvCompleteRdmaHandshake::TPtr& ev);
+        void Handle(TEvAbortRdmaHandshake::TPtr& ev);
 
         bool CleanupEventQueueScheduled = false;
         void ScheduleCleanupEventQueue();
@@ -456,6 +464,82 @@ namespace NActors {
 
         TInterconnectSessionTCP* Session = nullptr;
         TActorId SessionID;
+
+        class TPreparedSession {
+        public:
+            struct TReleased {
+                TInterconnectSessionTCP* Session = nullptr;
+                TActorId SessionID;
+                TActorId SessionVirtualId;
+                TActorId RemoteSessionVirtualId;
+            };
+
+            TPreparedSession(
+                    TInterconnectSessionTCP* session,
+                    TActorId sessionId,
+                    TActorId sessionVirtualId,
+                    TActorId remoteSessionVirtualId,
+                    TActorId handshakeActorId)
+                : Session(session)
+                , SessionID(sessionId)
+                , SessionVirtualId(sessionVirtualId)
+                , RemoteSessionVirtualId(remoteSessionVirtualId)
+                , HandshakeActor(handshakeActorId)
+            {
+                Y_ABORT_UNLESS(session);
+                Y_ABORT_UNLESS(sessionId);
+                Y_ABORT_UNLESS(sessionVirtualId);
+                Y_ABORT_UNLESS(remoteSessionVirtualId);
+                Y_ABORT_UNLESS(handshakeActorId);
+            }
+
+            bool IsOwnedBy(const TActorId& handshakeActorId) const noexcept {
+                return HandshakeActor == handshakeActorId;
+            }
+
+            ~TPreparedSession();
+
+            TReleased Release() {
+                TReleased released{
+                    .Session = Session,
+                    .SessionID = SessionID,
+                    .SessionVirtualId = SessionVirtualId,
+                    .RemoteSessionVirtualId = RemoteSessionVirtualId,
+                };
+                Session = nullptr;
+                return released;
+            }
+
+            TInterconnectSessionTCP* GetSession() const noexcept {
+                return Session;
+            }
+
+            const TActorId& GetSessionID() const noexcept {
+                return SessionID;
+            }
+
+            const TActorId& GetSessionVirtualId() const noexcept {
+                return SessionVirtualId;
+            }
+
+            const TActorId& GetRemoteSessionVirtualId() const noexcept {
+                return RemoteSessionVirtualId;
+            }
+
+            const TActorId& GetHandshakeActor() const noexcept {
+                return HandshakeActor;
+            }
+
+        private:
+            TInterconnectSessionTCP* Session = nullptr;
+            TActorId SessionID;
+            TActorId SessionVirtualId;
+            TActorId RemoteSessionVirtualId;
+            TActorId HandshakeActor;
+        };
+        std::unique_ptr<TPreparedSession> PreparedRdmaSession;
+
+        void DropPreparedRdmaSession(const TActorId& handshakeActorId = TActorId());
 
         // virtual ids used during handshake to check if it is the connection
         // for the same session or to find out the latest shandshake
@@ -506,6 +590,7 @@ namespace NActors {
 
             DropIncomingHandshake();
             DropOutgoingHandshake();
+            DropPreparedRdmaSession();
         }
 
         void PrepareNewSessionHandshake() {

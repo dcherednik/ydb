@@ -1,6 +1,7 @@
 #include "interconnect_handshake.h"
 #include "handshake_broker.h"
 #include "interconnect_tcp_proxy.h"
+#include "rdma_handshake.h"
 
 #include "rdma/link_manager.h"
 #include "rdma/events.h"
@@ -48,6 +49,7 @@ namespace NActors {
                 }
             }
         };
+
     }
 
     class THandshakeActor
@@ -379,6 +381,7 @@ namespace NActors {
             }
         } Rdma;
         bool RunDelayedRdmaHandshake = false;
+        bool RdmaSendReceiveHandshakeOk = false;
 
     public:
         THandshakeActor(TInterconnectProxyCommon::TPtr common, const TActorId& self, const TActorId& peer,
@@ -497,7 +500,10 @@ namespace NActors {
                                 SendExBlock(MainChannel, ack, "TRdmaHandshakeReadAck");
                                 if (ack.HasDigest()) {
                                     Params.UseRdma = true;
+                                    Params.AllowRdmaSendReceive = RdmaSendReceiveHandshakeOk;
                                 } else {
+                                    AbortPreparedRdmaHandshakeSession();
+                                    Params.AllowRdmaSendReceive = false;
                                     Rdma.Clear();
                                 }
                             }
@@ -509,6 +515,8 @@ namespace NActors {
                                     LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_ERROR,
                                         "RDMA memory read failed, disable rdma on the initiator");
                                     Rdma.HandShakeMemRegion.Reset();
+                                    AbortPreparedRdmaHandshakeSession();
+                                    Params.AllowRdmaSendReceive = false;
                                     Rdma.Clear();
                                     // During outgoing handshake we got rdma qp
                                     // but unable to got rdma read confirmation - run pending rdma handshake to try to reestablish
@@ -516,6 +524,7 @@ namespace NActors {
                                     RunDelayedRdmaHandshake = true;
                                 } else {
                                     Params.UseRdma = true;
+                                    Params.AllowRdmaSendReceive = RdmaSendReceiveHandshakeOk;
                                 }
                             }
                         }
@@ -532,6 +541,10 @@ namespace NActors {
                 }
             } catch (const TExHandshakeFailed&) {
                 ProgramInfo.Clear();
+            }
+
+            if (!ProgramInfo) {
+                AbortPreparedRdmaHandshakeSession();
             }
 
             if (ProgramInfo) {
@@ -847,6 +860,43 @@ namespace NActors {
             return rdmaReadAck.GetDigest() == crc;
         }
 
+        void AbortPreparedRdmaHandshakeSession() {
+            if (RdmaSendReceiveHandshakeOk) {
+                SendToProxy(MakeHolder<TEvAbortRdmaHandshake>());
+                RdmaSendReceiveHandshakeOk = false;
+            }
+        }
+
+        bool RunRdmaSendReceiveHandshake(bool incoming) {
+            if (!Params.AllowRdmaSendReceive) {
+                return false;
+            }
+
+            MainChannel.ResetPollerToken();
+            Register(CreateRdmaHandshakeActor(
+                Common,
+                SelfActorId,
+                MainChannel.GetSocketRef(),
+                SelfVirtualId,
+                PeerVirtualId,
+                PeerNodeId,
+                Params,
+                Rdma.Qp,
+                Rdma.Cq,
+                incoming,
+                Deadline), TMailboxType::ReadAsFilled);
+            auto ev = WaitForSpecificEvent<TEvRdmaHandshakeResult>("RdmaSendReceiveHandshake");
+            MainChannel.RegisterInPoller();
+
+            RdmaSendReceiveHandshakeOk = ev->Get()->Success;
+            if (!RdmaSendReceiveHandshakeOk) {
+                LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_ERROR,
+                    "RDMA send/receive handshake failed: %s", ev->Get()->Error.data());
+                return false;
+            }
+            return true;
+        }
+
         NInterconnect::NRdma::TMemRegionPtr SetupRdmaHandshakeRegion(NActorsInterconnect::TRdmaHandshake& proto) {
             NInterconnect::NRdma::TMemRegionPtr region = Common->RdmaMemPool->Alloc(RdmaHandshakeRegionSize, NInterconnect::NRdma::IMemPool::PAGE_ALIGNED);
             if (!region) {
@@ -994,7 +1044,7 @@ namespace NActors {
                     rdmaHs->SetMtuIndex(hd.MtuIndex);
                     rdmaHs->SetRdmaChecksum(Common->Settings.RdmaChecksum);
                     if (Common->Settings.EnableRdmaSendReceive) {
-                        rdmaHs->SetSendReceiveCompat(true);
+                        rdmaHs->SetSendReceiveVersion(RDMA_SEND_RECEIVE_VERSION);
                     }
                     if (auto region = SetupRdmaHandshakeRegion(*rdmaHs)) {
                         Rdma.HandShakeMemRegion = std::move(region);
@@ -1085,7 +1135,11 @@ namespace NActors {
                             Rdma.Clear();
                         } else {
                             Params.ChecksumRdmaEvent = remoteQpPrepared.GetRdmaChecksum();
-                            Params.AllowRdmaSendReceive = Common->Settings.EnableRdmaSendReceive && remoteQpPrepared.GetSendReceiveCompat();
+                            Params.AllowRdmaSendReceive = Common->Settings.EnableRdmaSendReceive
+                                && IsRdmaSendReceiveVersionSupported(remoteQpPrepared.GetSendReceiveVersion());
+                            if (Params.AllowRdmaSendReceive && !RunRdmaSendReceiveHandshake(false)) {
+                                Params.AllowRdmaSendReceive = false;
+                            }
                         }
                     } else {
                         LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_ERROR,
@@ -1408,6 +1462,9 @@ namespace NActors {
                         FillInScopeId(*success.MutableServerScopeId());
                     }
 
+                    const auto& selfActorId = success.GetSenderActorId();
+                    SelfVirtualId.Parse(selfActorId.data(), selfActorId.size());
+
                     if (rdmaIncommingHandshake) {
                         TryRdmaQpExchange(rdmaIncommingHandshake.value(), success);
                         if (Rdma) {
@@ -1420,10 +1477,11 @@ namespace NActors {
                                     Params.ChecksumRdmaEvent = false;
                                     success.MutableQpPrepared()->SetRdmaChecksum(false);
                                 }
-                            }
-                            if (Common->Settings.EnableRdmaSendReceive && rdmaIncommingHandshake->GetSendReceiveCompat()) {
-                                Params.AllowRdmaSendReceive = true;
-                                success.MutableQpPrepared()->SetSendReceiveCompat(true);
+                                if (Common->Settings.EnableRdmaSendReceive
+                                        && IsRdmaSendReceiveVersionSupported(rdmaIncommingHandshake->GetSendReceiveVersion())) {
+                                    Params.AllowRdmaSendReceive = true;
+                                    success.MutableQpPrepared()->SetSendReceiveVersion(RDMA_SEND_RECEIVE_VERSION);
+                                }
                             }
                         } else {
                             success.SetRdmaErr("Unable to perform qp exchange on the incomming side");
@@ -1465,6 +1523,9 @@ namespace NActors {
                     }
 
                     SendExBlock(MainChannel, record, "ExReply");
+                    if (Params.AllowRdmaSendReceive && !RunRdmaSendReceiveHandshake(true)) {
+                        Params.AllowRdmaSendReceive = false;
+                    }
 
                     // extract sender actor id (self virtual id)
                     const auto& str = success.GetSenderActorId();

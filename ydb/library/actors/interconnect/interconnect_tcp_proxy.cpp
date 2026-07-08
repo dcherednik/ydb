@@ -340,6 +340,7 @@ namespace NActors {
         ICPROXY_PROFILED;
 
         TEvHandshakeDone *msg = ev->Get();
+        const TActorId handshakeActorId = ev->Sender;
 
         bool runDelayedRdmaHandshakeTimer = false;
         const bool rdmaHandshakeSucceeded = msg->RdmaHanshakeResult.IsOk();
@@ -371,17 +372,35 @@ namespace NActors {
         Y_ABORT_UNLESS(!IncomingHandshakeActor && !OutgoingHandshakeActor);
         SwitchToState(__LINE__, "StateWork", &TThis::StateWork);
 
+        auto error = [&](const char* description) {
+            TransitToErrorState(description);
+        };
+
         if (Session) {
             // this is continuation request, check that virtual ids match
             Y_ABORT_UNLESS(SessionVirtualId == msg->Self && RemoteSessionVirtualId == msg->Peer);
+        } else if (PreparedRdmaSession && PreparedRdmaSession->IsOwnedBy(handshakeActorId)) {
+            Y_ABORT_UNLESS(PreparedRdmaSession->GetSessionVirtualId() == msg->Self);
+            Y_ABORT_UNLESS(PreparedRdmaSession->GetRemoteSessionVirtualId() == msg->Peer);
+
+            RemoteProgramInfo = std::move(msg->ProgramInfo);
+            if (!RemoteProgramInfo) {
+                return error("Session continuation race");
+            }
+
+            ++RdmaRetryWatchdogCookie;
+            auto prepared = PreparedRdmaSession->Release();
+            PreparedRdmaSession.reset();
+            Session = prepared.Session;
+            SessionID = prepared.SessionID;
+            SessionVirtualId = prepared.SessionVirtualId;
+            RemoteSessionVirtualId = prepared.RemoteSessionVirtualId;
+
+            LOG_INFO_IC("ICP22", "promoted prepared RDMA session: %s", SessionID.ToString().data());
         } else {
             // this is initial request, check that we have virtual ids not filled in
             Y_ABORT_UNLESS(!SessionVirtualId && !RemoteSessionVirtualId);
         }
-
-        auto error = [&](const char* description) {
-            TransitToErrorState(description);
-        };
 
         // If session is not created, then create new one.
         if (!Session) {
@@ -442,6 +461,7 @@ namespace NActors {
                            ui32(ev->Get()->Temporary), ev->Get()->Explanation.data(), OutgoingHandshakeActor.ToString().data());
             }
             DropIncomingHandshake(false);
+            DropPreparedRdmaSession(ev->Sender);
         } else if (ev->Sender == OutgoingHandshakeActor) {
             if (handshakeFailLogPriority == NLog::PRI_NOTICE) {
                 LogHandshakeStatusNotice("ICP25", EHandshakeStatusDirection::Outgoing, *ev->Get());
@@ -452,6 +472,7 @@ namespace NActors {
                            HeldHandshakeReply ? "yes" : "no");
             }
             DropOutgoingHandshake(false);
+            DropPreparedRdmaSession(ev->Sender);
 
             if (IEventBase* reply = HeldHandshakeReply.Release()) {
                 Y_ABORT_UNLESS(IncomingHandshakeActor);
@@ -557,6 +578,83 @@ namespace NActors {
                 DropSessionEvent(event);
             }
         }
+    }
+
+    TInterconnectProxyTCP::TPreparedSession::~TPreparedSession() {
+        if (Session) {
+            IActor::InvokeOtherActor(*Session, &TInterconnectSessionTCP::AbortPreparedRdmaHandshake);
+        }
+    }
+
+    void TInterconnectProxyTCP::DropPreparedRdmaSession(const TActorId& handshakeActorId) {
+        ICPROXY_PROFILED;
+
+        if (!PreparedRdmaSession) {
+            return;
+        }
+        if (handshakeActorId && !PreparedRdmaSession->IsOwnedBy(handshakeActorId)) {
+            return;
+        }
+
+        LOG_DEBUG_IC("ICRDMA", "drop prepared RDMA session Session# %s Handshake# %s",
+            PreparedRdmaSession->GetSessionID().ToString().data(), PreparedRdmaSession->GetHandshakeActor().ToString().data());
+        PreparedRdmaSession.reset();
+    }
+
+    void TInterconnectProxyTCP::Handle(TEvPrepareRdmaHandshake::TPtr& ev) {
+        ICPROXY_PROFILED;
+
+        auto* msg = ev->Get();
+        if (ev->Sender != IncomingHandshakeActor && ev->Sender != OutgoingHandshakeActor) {
+            Send(ev->Sender, new TEvPrepareRdmaHandshakeResult("obsolete handshake actor"));
+            return;
+        }
+        if (!msg->Self || !msg->Peer || !msg->Qp || !msg->Cq) {
+            Send(ev->Sender, new TEvPrepareRdmaHandshakeResult("invalid RDMA handshake prepare request"));
+            return;
+        }
+        if (Session) {
+            Send(ev->Sender, new TEvPrepareRdmaHandshakeResult("RDMA prepared session over existing session is not supported yet"));
+            return;
+        }
+
+        DropPreparedRdmaSession();
+
+        auto* session = new TInterconnectSessionTCP(this, msg->Params);
+        const TActorId sessionId = RegisterWithSameMailbox(session);
+        IActor::InvokeOtherActor(*session, &TInterconnectSessionTCP::Init);
+
+        if (!IActor::InvokeOtherActor(*session, &TInterconnectSessionTCP::PrepareRdmaHandshake, ev->Sender,
+                std::move(msg->Qp), std::move(msg->Cq))) {
+            IActor::InvokeOtherActor(*session, &TInterconnectSessionTCP::AbortPreparedRdmaHandshake);
+            Send(ev->Sender, new TEvPrepareRdmaHandshakeResult("unable to register RDMA receive mapping"));
+            return;
+        }
+
+        PreparedRdmaSession = std::make_unique<TPreparedSession>(session, sessionId, msg->Self, msg->Peer, ev->Sender);
+
+        LOG_DEBUG_IC("ICRDMA", "prepared RDMA session Session# %s Self# %s Peer# %s Handshake# %s",
+            PreparedRdmaSession->GetSessionID().ToString().data(), PreparedRdmaSession->GetSessionVirtualId().ToString().data(),
+            PreparedRdmaSession->GetRemoteSessionVirtualId().ToString().data(), PreparedRdmaSession->GetHandshakeActor().ToString().data());
+        Send(ev->Sender, new TEvPrepareRdmaHandshakeResult());
+    }
+
+    void TInterconnectProxyTCP::Handle(TEvAbortRdmaHandshake::TPtr& ev) {
+        ICPROXY_PROFILED;
+
+        DropPreparedRdmaSession(ev->Sender);
+    }
+
+    void TInterconnectProxyTCP::Handle(TEvCompleteRdmaHandshake::TPtr& ev) {
+        ICPROXY_PROFILED;
+
+        if (!PreparedRdmaSession || !PreparedRdmaSession->IsOwnedBy(ev->Sender)) {
+            Send(ev->Sender, new TEvCompleteRdmaHandshakeResult("RDMA prepared session is not found"));
+            return;
+        }
+
+        IActor::InvokeOtherActor(*PreparedRdmaSession->GetSession(), &TInterconnectSessionTCP::CompleteRdmaHandshake);
+        Send(ev->Sender, new TEvCompleteRdmaHandshakeResult());
     }
 
     void TInterconnectProxyTCP::DropSessionEvent(STATEFN_SIG) {
@@ -1243,6 +1341,7 @@ namespace NActors {
 
         DelayedRdmaHandshakeTimeout = TDuration::Zero();
         SetRdmaRetryWatchdogPending(false);
+        DropPreparedRdmaSession();
 
         if (Session) {
             IActor::InvokeOtherActor(*Session, &TInterconnectSessionTCP::Terminate, TDisconnectReason());
@@ -1254,6 +1353,7 @@ namespace NActors {
     void TInterconnectProxyTCP::PassAway() {
         DelayedRdmaHandshakeTimeout = TDuration::Zero();
         SetRdmaRetryWatchdogPending(false);
+        DropPreparedRdmaSession();
 
         if (Session) {
             IActor::InvokeOtherActor(*Session, &TInterconnectSessionTCP::Terminate, TDisconnectReason());

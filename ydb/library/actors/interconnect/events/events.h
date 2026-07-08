@@ -55,6 +55,12 @@ namespace NActors {
         // external data channel messages
         EvSubscribeForConnection,
         EvReportConnection,
+        EvPrepareRdmaHandshake,
+        EvPrepareRdmaHandshakeResult,
+        EvCompleteRdmaHandshake,
+        EvCompleteRdmaHandshakeResult,
+        EvAbortRdmaHandshake,
+        EvRdmaHandshakeResult,
 
         // io_uring transport events
         EvUringRegister,
