@@ -408,4 +408,30 @@ namespace NActors {
             , Socket(std::move(socket))
         {}
     };
+
+    struct TEvPrepareRdmaHandshake : TEventLocal<TEvPrepareRdmaHandshake, (ui32)ENetwork::EvPrepareRdmaHandshake> {
+        NInterconnect::NRdma::TQueuePair::TPtr Qp;
+        NInterconnect::NRdma::ICq::TPtr Cq;
+
+        TEvPrepareRdmaHandshake(
+                NInterconnect::NRdma::TQueuePair::TPtr qp,
+                NInterconnect::NRdma::ICq::TPtr cq)
+            : Qp(std::move(qp))
+            , Cq(std::move(cq))
+        {}
+    };
+
+    struct TEvPrepareRdmaHandshakeResult : TEventLocal<TEvPrepareRdmaHandshakeResult, (ui32)ENetwork::EvPrepareRdmaHandshakeResult> {
+        TString Error;
+
+        TEvPrepareRdmaHandshakeResult() = default;
+
+        explicit TEvPrepareRdmaHandshakeResult(TString error)
+            : Error(std::move(error))
+        {}
+
+        explicit operator bool() const noexcept {
+            return Error.empty();
+        }
+    };
 }

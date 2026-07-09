@@ -554,6 +554,10 @@ namespace NActors {
         UpdateErrorStateLog(TActivationContext::Now(), kind, ev->Get()->Explanation);
     }
 
+    void TInterconnectProxyTCP::Handle(TEvPrepareRdmaHandshake::TPtr& ev) {
+        ICPROXY_PROFILED;
+    }
+
     void TInterconnectProxyTCP::ProcessPendingSessionEvents() {
         ICPROXY_PROFILED;
 
