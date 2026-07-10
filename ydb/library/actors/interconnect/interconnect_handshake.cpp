@@ -7,6 +7,8 @@
 #include "rdma/mem_pool.h"
 #include "rdma/rdma.h"
 
+#include "rdma_sync_actor.h"
+
 #include <ydb/library/actors/interconnect/rdma/cq_actor/cq_actor.h>
 
 #include <ydb/library/actors/core/actor_coroutine.h>
@@ -29,10 +31,6 @@ namespace NActors {
 
     static constexpr size_t RdmaHandshakeRegionSize = 4096;
     static constexpr ui32 RdmaSendReceiveVersion = 1;
-
-    static bool IsRdmaSendReceiveVersionSupported(ui32 version) noexcept {
-        return version == RdmaSendReceiveVersion;
-    }
 
     namespace {
         class THandshakeActorCreateTimer {
@@ -875,6 +873,63 @@ namespace NActors {
             return region;
         }
 
+        void RunRdmaIncomminghandshakePart() {
+            MainChannel.ResetPollerToken();
+            Register(NInterconnect::NRdma::CreateRdmaIncommingSyncActor(
+                Common, PeerNodeId, MainChannel.GetSocketRef(), Rdma.Qp, Rdma.Cq));
+                        
+            auto ev = WaitForSpecificEvent<TEvRdmaSyncResult>("TEvRdmaSyncResult");
+            MainChannel.RegisterInPoller();
+
+            if (ev->Get()->IsError()) {
+                LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_ERROR,
+                "RDMA send/receive handshake failed: %s", ev->Get()->Error.data());
+                Params.AllowRdmaSendReceive = false;
+            }
+        }
+
+        void RunRdmaOutgoingHandshakePart(const ::NActorsInterconnect::THandshakeSuccess& success) {
+            const auto& remoteQpPrepared = success.GetQpPrepared();
+            LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_TRACE,
+                "peer has prepared qp: %d", remoteQpPrepared.GetQpNum());
+            NInterconnect::NRdma::THandshakeData hd {
+                .QpNum = remoteQpPrepared.GetQpNum(),
+                .SubnetPrefix = remoteQpPrepared.GetSubnetPrefix(),
+                .InterfaceId = remoteQpPrepared.GetInterfaceId(),
+                .MtuIndex = remoteQpPrepared.GetMtuIndex(),
+            };
+            int err = Rdma.Qp->ToRtsState(hd);
+            if (err) {
+                TStringBuilder sb;
+                sb << hd;
+                LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_ERROR,
+                        "Unable to promote QP to RTS, err: %d (%s), handshake data: %s", err, strerror(err), sb.data());
+                Rdma.HandShakeMemRegion.Reset();
+                Rdma.Clear();
+            } else {
+                Params.ChecksumRdmaEvent = remoteQpPrepared.GetRdmaChecksum();
+                Params.AllowRdmaSendReceive = Common->Settings.EnableRdmaSendReceive
+                    && (remoteQpPrepared.GetSendReceiveVersion() == 1);
+                if (Params.AllowRdmaSendReceive) {
+                    // QP is ready, now we need two things:
+                    // 1. make sure send and receive works
+                    // 2. perform barrier to make sure sessions are ready to handle recieve
+                    MainChannel.ResetPollerToken();
+
+                    Register(NInterconnect::NRdma::CreateRdmaOutgoingSyncActor(
+                        Common, PeerNodeId, MainChannel.GetSocketRef(), Rdma.Qp, Rdma.Cq));
+                        
+                    auto ev = WaitForSpecificEvent<TEvRdmaSyncResult>("TEvRdmaSyncResult");
+                    MainChannel.RegisterInPoller();
+                    if (ev->Get()->IsError()) {
+                        LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_ERROR,
+                        "RDMA send/receive handshake failed: %s", ev->Get()->Error.data());
+                        Params.AllowRdmaSendReceive = false;
+                    }
+                }
+            }
+        }
+
         void PerformOutgoingHandshake() {
             LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICH01", NLog::PRI_DEBUG,
                 "starting outgoing handshake");
@@ -1075,28 +1130,7 @@ namespace NActors {
 
                 if (Rdma) {
                     if (success.HasQpPrepared()) {
-                        const auto& remoteQpPrepared = success.GetQpPrepared();
-                        LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_TRACE,
-                            "peer has prepared qp: %d", remoteQpPrepared.GetQpNum());
-                        NInterconnect::NRdma::THandshakeData hd {
-                            .QpNum = remoteQpPrepared.GetQpNum(),
-                            .SubnetPrefix = remoteQpPrepared.GetSubnetPrefix(),
-                            .InterfaceId = remoteQpPrepared.GetInterfaceId(),
-                            .MtuIndex = remoteQpPrepared.GetMtuIndex(),
-                        };
-                        int err = Rdma.Qp->ToRtsState(hd);
-                        if (err) {
-                            TStringBuilder sb;
-                            sb << hd;
-                            LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_ERROR,
-                                    "Unable to promote QP to RTS, err: %d (%s), handshake data: %s", err, strerror(err), sb.data());
-                            Rdma.HandShakeMemRegion.Reset();
-                            Rdma.Clear();
-                        } else {
-                            Params.ChecksumRdmaEvent = remoteQpPrepared.GetRdmaChecksum();
-                            Params.AllowRdmaSendReceive = Common->Settings.EnableRdmaSendReceive
-                                && IsRdmaSendReceiveVersionSupported(remoteQpPrepared.GetSendReceiveVersion());
-                        }
+                        RunRdmaOutgoingHandshakePart(success);
                     } else {
                         LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_ERROR,
                             "Non success qp response from remote side");
@@ -1435,7 +1469,7 @@ namespace NActors {
                                 }
                             }
                             if (Common->Settings.EnableRdmaSendReceive
-                                    && IsRdmaSendReceiveVersionSupported(rdmaIncommingHandshake->GetSendReceiveVersion())) {
+                                    && (rdmaIncommingHandshake->GetSendReceiveVersion() == RdmaSendReceiveVersion)) {
                                 Params.AllowRdmaSendReceive = true;
                                 success.MutableQpPrepared()->SetSendReceiveVersion(RdmaSendReceiveVersion);
                             }
@@ -1484,6 +1518,9 @@ namespace NActors {
                     // extract sender actor id (self virtual id)
                     const auto& str = success.GetSenderActorId();
                     SelfVirtualId.Parse(str.data(), str.size());
+                    if (Params.AllowRdmaSendReceive) {
+                        RunRdmaIncomminghandshakePart();
+                    }
                 } else if (auto ev = reply->CastAsLocal<TEvHandshakeReplyError>()) {
                     // in case of error just send reply to the peer and terminate handshake
                     SendExBlock(MainChannel, ev->Record, "ExReply");

@@ -556,6 +556,12 @@ namespace NActors {
 
     void TInterconnectProxyTCP::Handle(TEvPrepareRdmaHandshake::TPtr& ev) {
         ICPROXY_PROFILED;
+        if (Session) {
+            ev->Get()->ReportError("RDMA prepared session over existing session is not supported yet");
+        } else {
+            ev->Get()->CreateSession(this);
+        }
+        ev->Forward(ev->Sender);
     }
 
     void TInterconnectProxyTCP::ProcessPendingSessionEvents() {

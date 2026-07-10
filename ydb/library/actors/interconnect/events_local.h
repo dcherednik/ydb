@@ -11,6 +11,8 @@
 #include "types.h"
 
 namespace NActors {
+    class TInterconnectProxyTCP;
+
     struct TEvSocketReadyRead: public TEventLocal<TEvSocketReadyRead, ui32(ENetwork::SocketReadyRead)> {
     };
 
@@ -409,29 +411,33 @@ namespace NActors {
         {}
     };
 
-    struct TEvPrepareRdmaHandshake : TEventLocal<TEvPrepareRdmaHandshake, (ui32)ENetwork::EvPrepareRdmaHandshake> {
-        NInterconnect::NRdma::TQueuePair::TPtr Qp;
-        NInterconnect::NRdma::ICq::TPtr Cq;
-
-        TEvPrepareRdmaHandshake(
-                NInterconnect::NRdma::TQueuePair::TPtr qp,
-                NInterconnect::NRdma::ICq::TPtr cq)
-            : Qp(std::move(qp))
-            , Cq(std::move(cq))
-        {}
+    class ISessionCreator {
+    // Only proxy can create session, but handshake actor know how to create session.
+    friend class TInterconnectProxyTCP;
+    private:
+        void virtual CreateSession(TInterconnectProxyTCP* const proxy) = 0;
+        void virtual ReportError(TString Error) = 0;
+    public:
+        virtual ~ISessionCreator() = default;
     };
 
-    struct TEvPrepareRdmaHandshakeResult : TEventLocal<TEvPrepareRdmaHandshakeResult, (ui32)ENetwork::EvPrepareRdmaHandshakeResult> {
+    struct TEvPrepareRdmaHandshake
+        : TEventLocal<TEvPrepareRdmaHandshake, (ui32)ENetwork::EvPrepareRdmaHandshake>
+        , public ISessionCreator
+    {
+    };
+
+    struct TEvRdmaSyncResult : TEventLocal<TEvRdmaSyncResult, (ui32)ENetwork::EvRdmaSyncResult> {
         TString Error;
 
-        TEvPrepareRdmaHandshakeResult() = default;
+        TEvRdmaSyncResult() = default;
 
-        explicit TEvPrepareRdmaHandshakeResult(TString error)
+        TEvRdmaSyncResult(TString error)
             : Error(std::move(error))
         {}
 
-        explicit operator bool() const noexcept {
-            return Error.empty();
+        bool IsError() const {
+            return !Error.empty();
         }
     };
 }

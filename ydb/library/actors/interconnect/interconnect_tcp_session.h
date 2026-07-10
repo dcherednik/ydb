@@ -505,6 +505,7 @@ namespace NActors {
         static constexpr ui64 MaxSubscriberHistoryEntries = 1000;
 
         explicit TInterconnectSessionTCP(TInterconnectProxyTCP* const proxy);
+
         ~TInterconnectSessionTCP();
 
         void Init(const TSessionParams& params) override;
@@ -822,7 +823,14 @@ namespace NActors {
         NHPTimer::STime PartUpdateTimestamp = 0;
 
         NInterconnect::TInterconnectZcProcessor ZcProcessor;
+
+    protected:
+        TInterconnectSessionTCP(
+            TInterconnectProxyTCP* const proxy,
+            NInterconnect::NRdma::TQueuePair::TPtr rdmaQp);
         NInterconnect::NRdma::TQueuePair::TPtr RdmaQp;
+
+    private:
 
         void UpdateState(std::optional<EState> newState = std::nullopt) {
             if (!newState || *newState != State) {
@@ -853,6 +861,24 @@ namespace NActors {
         }
 
         void UpdateUtilization();
+    };
+
+    class TInterconnectSessionRdma : public TInterconnectSessionTCP {
+    public:
+        TInterconnectSessionRdma(
+            TInterconnectProxyTCP* const proxy,
+            NInterconnect::NRdma::TQueuePair::TPtr rdmaQp);
+        // Must be called after registration as actor
+        void ToSyncMode(TActorId syncActor, NInterconnect::NRdma::ICq::TPtr& cq) noexcept;
+        void ToDataMode() noexcept;
+    private:
+        STATEFN(SyncStateFunc) {
+            STRICT_STFUNC_BODY(
+                hFunc(NInterconnect::NRdma::TEvRdmaIoReceiveDone, HandleSrqSyncState)
+            )
+        }
+        void HandleSrqSyncState(NInterconnect::NRdma::TEvRdmaIoReceiveDone::TPtr& ev);
+        TActorId SyncActor;
     };
 
     class TInterconnectSessionKiller

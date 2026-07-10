@@ -55,6 +55,31 @@ namespace NActors {
         ReceiveContext.Reset(new TReceiveContext);
     }
 
+    TInterconnectSessionTCP::TInterconnectSessionTCP(
+        TInterconnectProxyTCP* const proxy,
+        NInterconnect::NRdma::TQueuePair::TPtr rdmaQp)
+        : TInterconnectSessionTCP(proxy)
+    {
+        RdmaQp = rdmaQp;
+    }
+
+    TInterconnectSessionRdma::TInterconnectSessionRdma(
+        TInterconnectProxyTCP* const proxy,
+        NInterconnect::NRdma::TQueuePair::TPtr rdmaQp)
+        : TInterconnectSessionTCP(proxy, rdmaQp)
+    {
+        UnsafeBecome(&TInterconnectSessionRdma::SyncStateFunc);
+    };
+
+    void TInterconnectSessionRdma::ToSyncMode(TActorId syncActor, NInterconnect::NRdma::ICq::TPtr& cq) noexcept {
+        cq->RegisterQpAsync(RdmaQp->GetQpNum(), SelfId());
+        SyncActor = syncActor;
+    }
+
+    void TInterconnectSessionRdma::HandleSrqSyncState(NInterconnect::NRdma::TEvRdmaIoReceiveDone::TPtr& ev) {
+        ev->Forward(SyncActor);
+    }
+
     TInterconnectSessionTCP::~TInterconnectSessionTCP() {
         // close socket ASAP when actor system is being shut down
         if (Socket) {

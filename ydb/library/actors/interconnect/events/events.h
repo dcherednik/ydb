@@ -52,7 +52,7 @@ namespace NActors {
 
         EvForwardSubscribeSession,
         EvPrepareRdmaHandshake,
-        EvPrepareRdmaHandshakeResult,
+        EvRdmaSyncResult,
 
         // external data channel messages
         EvSubscribeForConnection,
