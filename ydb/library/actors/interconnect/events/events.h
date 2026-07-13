@@ -51,7 +51,7 @@ namespace NActors {
         HandshakeBrokerPermit,
 
         EvForwardSubscribeSession,
-        EvPrepareRdmaHandshake,
+        EvProxyCall,
         EvRdmaSyncResult,
 
         // external data channel messages

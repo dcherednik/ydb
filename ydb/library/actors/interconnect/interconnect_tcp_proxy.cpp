@@ -554,14 +554,14 @@ namespace NActors {
         UpdateErrorStateLog(TActivationContext::Now(), kind, ev->Get()->Explanation);
     }
 
-    void TInterconnectProxyTCP::Handle(TEvPrepareRdmaHandshake::TPtr& ev) {
+    void TInterconnectProxyTCP::Handle(TEvProxyCall::TPtr& ev) {
         ICPROXY_PROFILED;
         if (Session) {
-            ev->Get()->ReportError("RDMA prepared session over existing session is not supported yet");
+            ev->Get()->ReportError("Proxy call over owned session is not supported yet");
         } else {
-            ev->Get()->CreateSession(this);
+            ev->Get()->Call(this);
         }
-        ev->Forward(ev->Sender);
+        TlsActivationContext->Send(ev->Forward(ev->Sender));
     }
 
     void TInterconnectProxyTCP::ProcessPendingSessionEvents() {

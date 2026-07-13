@@ -12,6 +12,8 @@ namespace NInterconnect::NRdma {
 
 NActors::IActor* CreateRdmaOutgoingSyncActor(
     NActors::TInterconnectProxyCommon::TPtr common,
+    const NActors::TActorId& selfVirtualId,
+    const NActors::TActorId& peerVirtualId,
     ui32 peerNodeId,
     TIntrusivePtr<NInterconnect::TStreamSocket> socket,
     TQueuePair::TPtr qp,
@@ -19,6 +21,8 @@ NActors::IActor* CreateRdmaOutgoingSyncActor(
 
 NActors::IActor* CreateRdmaIncommingSyncActor(
     NActors::TInterconnectProxyCommon::TPtr common,
+    const NActors::TActorId& selfVirtualId,
+    const NActors::TActorId& peerVirtualId,
     ui32 peerNodeId,
     TIntrusivePtr<NInterconnect::TStreamSocket> socket,
     TQueuePair::TPtr qp,

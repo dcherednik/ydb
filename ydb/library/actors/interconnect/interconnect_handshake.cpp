@@ -876,7 +876,7 @@ namespace NActors {
         void RunRdmaIncomminghandshakePart() {
             MainChannel.ResetPollerToken();
             Register(NInterconnect::NRdma::CreateRdmaIncommingSyncActor(
-                Common, PeerNodeId, MainChannel.GetSocketRef(), Rdma.Qp, Rdma.Cq));
+                Common, SelfVirtualId, PeerVirtualId, PeerNodeId, MainChannel.GetSocketRef(), Rdma.Qp, Rdma.Cq));
                         
             auto ev = WaitForSpecificEvent<TEvRdmaSyncResult>("TEvRdmaSyncResult");
             MainChannel.RegisterInPoller();
@@ -917,7 +917,7 @@ namespace NActors {
                     MainChannel.ResetPollerToken();
 
                     Register(NInterconnect::NRdma::CreateRdmaOutgoingSyncActor(
-                        Common, PeerNodeId, MainChannel.GetSocketRef(), Rdma.Qp, Rdma.Cq));
+                        Common, SelfVirtualId, PeerVirtualId, PeerNodeId, MainChannel.GetSocketRef(), Rdma.Qp, Rdma.Cq));
                         
                     auto ev = WaitForSpecificEvent<TEvRdmaSyncResult>("TEvRdmaSyncResult");
                     MainChannel.RegisterInPoller();

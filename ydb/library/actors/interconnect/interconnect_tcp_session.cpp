@@ -76,8 +76,16 @@ namespace NActors {
         SyncActor = syncActor;
     }
 
+    void TInterconnectSessionRdma::ToDataMode() noexcept {
+        SwitchToDataMode();
+    }
+
+    void TInterconnectSessionTCP::SwitchToDataMode() noexcept {
+        Become(&TInterconnectSessionTCP::StateFunc);
+    }
+
     void TInterconnectSessionRdma::HandleSrqSyncState(NInterconnect::NRdma::TEvRdmaIoReceiveDone::TPtr& ev) {
-        ev->Forward(SyncActor);
+        TlsActivationContext->Send(ev->Forward(SyncActor));
     }
 
     TInterconnectSessionTCP::~TInterconnectSessionTCP() {

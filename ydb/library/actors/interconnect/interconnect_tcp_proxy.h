@@ -148,7 +148,7 @@ namespace NActors {
                 cFunc(EvPassAwayIfNeeded, HandlePassAwayIfNeeded)                               \
                 hFunc(TEvSubscribeForConnection, Handle);                                       \
                 hFunc(TEvReportConnection, Handle);                                             \
-                hFunc(TEvPrepareRdmaHandshake, Handle);                                         \
+                hFunc(TEvProxyCall, Handle);                                         \
                 fFunc(EvRdmaPendingHandshake, HandleRdmaDelayedHandshake)                       \
                 default:                                                                        \
                     Y_ABORT("unexpected event Type# 0x%08" PRIx32, type);                       \
@@ -448,7 +448,7 @@ namespace NActors {
         void RegisterRdmaFailure();
         void ScheduleDelayedRdmaHandshake();
         void SetRdmaRetryWatchdogPending(bool pending);
-        void Handle(TEvPrepareRdmaHandshake::TPtr& ev);
+        void Handle(TEvProxyCall::TPtr& ev);
 
         // hold all events before connection is established
         struct TPendingSessionEvent {

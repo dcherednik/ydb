@@ -411,19 +411,19 @@ namespace NActors {
         {}
     };
 
-    class ISessionCreator {
-    // Only proxy can create session, but handshake actor know how to create session.
+    class IProxyCall {
+    // Only proxy can call session methods directly
     friend class TInterconnectProxyTCP;
     private:
-        void virtual CreateSession(TInterconnectProxyTCP* const proxy) = 0;
+        void virtual Call(TInterconnectProxyTCP* const proxy) = 0;
         void virtual ReportError(TString Error) = 0;
     public:
-        virtual ~ISessionCreator() = default;
+        virtual ~IProxyCall() = default;
     };
 
-    struct TEvPrepareRdmaHandshake
-        : TEventLocal<TEvPrepareRdmaHandshake, (ui32)ENetwork::EvPrepareRdmaHandshake>
-        , public ISessionCreator
+    struct TEvProxyCall
+        : TEventLocal<TEvProxyCall, (ui32)ENetwork::EvProxyCall>
+        , public IProxyCall
     {
     };
 

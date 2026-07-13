@@ -830,6 +830,8 @@ namespace NActors {
             NInterconnect::NRdma::TQueuePair::TPtr rdmaQp);
         NInterconnect::NRdma::TQueuePair::TPtr RdmaQp;
 
+        void SwitchToDataMode() noexcept;
+
     private:
 
         void UpdateState(std::optional<EState> newState = std::nullopt) {
