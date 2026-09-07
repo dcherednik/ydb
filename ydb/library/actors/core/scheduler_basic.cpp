@@ -62,7 +62,6 @@ namespace NActors {
         ui64 activeTick = AlignUp<ui64>(throttledMonotonic, IntrasecondThreshold);
         TAutoPtr<TMomentMap> activeSec;
 
-        NHPTimer::STime hpprev = GetCycleCountFast();
         ui64 nextTimestamp = TInstant::Now().MicroSeconds();
         ui64 nextMonotonic = Max(currentMonotonic, GetMonotonicMicroSeconds());
 
@@ -74,23 +73,15 @@ namespace NActors {
 
                 throttledMonotonic = (delta > threshold) ? throttledMonotonic + threshold : nextMonotonic;
 
-                if (MonCounters) {
-                    *MonCounters->TimeDelayMs = (nextMonotonic - throttledMonotonic) / 1000;
-                }
             }
             AtomicStore(CurrentTimestamp, nextTimestamp);
             AtomicStore(CurrentMonotonic, nextMonotonic);
             currentMonotonic = nextMonotonic;
 
-            if (MonCounters) {
-                ++*MonCounters->Iterations;
-            }
 
             bool somethingDone = false;
 
             // first step - send everything triggered on schedule
-            ui64 eventsSent = 0;
-            ui64 eventsDropped = 0;
             for (;;) {
                 while (!!activeSec && !activeSec->empty()) {
                     TMomentMap::iterator it = activeSec->begin();
@@ -105,14 +96,11 @@ namespace NActors {
                                 if (cookie) {
                                     if (cookie->Detach()) {
                                         ActorSystem->Send(ev);
-                                        ++eventsSent;
                                     } else {
                                         delete ev;
-                                        ++eventsDropped;
                                     }
                                 } else {
                                     ActorSystem->Send(ev);
-                                    ++eventsSent;
                                 }
                             }
                         }
@@ -139,7 +127,6 @@ namespace NActors {
 
             // second step - collect everything from queues
 
-            ui64 eventsAdded = 0;
             for (ui32 i = 0; i != TotalReaders; ++i) {
                 while (NSchedulerQueue::TEntry* x = Readers[i]->Pop()) {
                     somethingDone = true;
@@ -167,22 +154,9 @@ namespace NActors {
                         queue->Writer.Push(instant, ev, cookie);
                     }
 
-                    ++eventsAdded;
                 }
             }
 
-            NHPTimer::STime hpnow = GetCycleCountFast();
-
-            if (MonCounters) {
-                *MonCounters->QueueSize -= eventsSent + eventsDropped;
-                *MonCounters->QueueSize += eventsAdded;
-                *MonCounters->EventsSent += eventsSent;
-                *MonCounters->EventsDropped += eventsDropped;
-                *MonCounters->EventsAdded += eventsAdded;
-                *MonCounters->ElapsedMicrosec += NHPTimer::GetSeconds(hpnow - hpprev) * 1000000;
-            }
-
-            hpprev = hpnow;
             nextTimestamp = TInstant::Now().MicroSeconds();
             nextMonotonic = Max(currentMonotonic, GetMonotonicMicroSeconds());
 
@@ -196,14 +170,9 @@ namespace NActors {
                 if (delta < Config.SpinThreshold) // not so much time left, just spin
                     continue;
 
-                if (MonCounters) {
-                    ++*MonCounters->Sleeps;
-                }
-
                 NanoSleep(delta * 1000); // ok, looks like we should sleep a bit.
 
                 // Don't count sleep in elapsed microseconds
-                hpprev = GetCycleCountFast();
                 nextTimestamp = TInstant::Now().MicroSeconds();
                 nextMonotonic = Max(currentMonotonic, GetMonotonicMicroSeconds());
             }

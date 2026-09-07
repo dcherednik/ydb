@@ -33,8 +33,7 @@ LWTRACE_USING(BLOBSTORAGE_PROVIDER);
                 }
 
                 void Update(i64 size) {
-                    ++*Msgs;
-                    *Bytes += size;
+                    Y_UNUSED(size);
                 }
             };
 
@@ -133,8 +132,6 @@ LWTRACE_USING(BLOBSTORAGE_PROVIDER);
             TLogSignature signature = ev->Get()->Signature.GetUnmasked();
             Y_ABORT_UNLESS(TLogSignature::First < signature && signature < TLogSignature::Max);
             i64 msgSize = ev->Get()->ApproximateSize();
-            // count written bytes
-            *LsmLogBytesWritten += msgSize;
             // update generic counters
             Counters.Update(signature, msgSize);
             std::unique_ptr<IEventHandle> converted(ev->Forward(YardID).Release());
@@ -165,8 +162,6 @@ LWTRACE_USING(BLOBSTORAGE_PROVIDER);
                 TLogSignature signature = log->Signature.GetUnmasked();
                 Y_ABORT_UNLESS(TLogSignature::First < signature && signature < TLogSignature::Max);
                 i64 msgSize = log->ApproximateSize();
-                // count written bytes
-                *LsmLogBytesWritten += msgSize;
                 // update generic counters
                 Counters.Update(signature, msgSize);
                 LWTRACK(VDiskRecoveryLogWriterVPutIsSent, log->Orbit, Owner, lsn);

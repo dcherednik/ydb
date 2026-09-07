@@ -4,6 +4,7 @@
 #include <ydb/core/blobstorage/lwtrace_probes/blobstorage_probes.h>
 #include <ydb/core/base/blobstorage_write_source.h>
 #include <ydb/core/mon/mon.h>
+#include <ydb/core/mon/noop_counter.h>
 #include <ydb/core/protos/blobstorage_disk.pb.h>
 #include <ydb/core/protos/node_whiteboard.pb.h>
 #include <ydb/core/util/light.h>
@@ -20,10 +21,21 @@ namespace NKikimr {
 
 struct TPDiskConfig;
 
+class TNoopPercentileTracker {
+public:
+    template <typename... TArgs>
+    void Initialize(TArgs&&...) {}
+
+    template <typename T>
+    void Increment(T) {}
+
+    void Update() {}
+};
+
 class TBurstmeter {
 private:
     TBucketQuoter<i64, TSpinLock, THPTimerUs> Bucket;
-    NMonitoring::TPercentileTrackerLg<5, 4, 15> Tracker;
+    TNoopPercentileTracker Tracker;
 public:
     TBurstmeter()
         : Bucket(1000ull * 1000ull * 1000ull, 0)
@@ -38,12 +50,10 @@ public:
 
     double Increment(ui64 tokens) {
         double burst = -double(Bucket.UseAndFill(tokens)) / (1000000ull);
-        Tracker.Increment(burst);
         return burst;
     }
 
     void Update() {
-        Tracker.Update();
     }
 };
 
@@ -58,9 +68,7 @@ public:
                            const TString &name, NPDisk::EDeviceType deviceType) = 0;
 
     void Increment(double value) {
-        if (Histo) {
-            Histo->Collect(value);
-        }
+        Y_UNUSED(value);
     }
 };
 
@@ -184,12 +192,12 @@ struct TPDiskMon {
         NHPTimer::STime ProcessingStartAt = 0;
         NHPTimer::STime WaitingStartAt = 0;
 
-        ::NMonitoring::TDynamicCounters::TCounterPtr PDiskThreadBusyTimeNs;
+        TNoopCounter PDiskThreadBusyTimeNs;
 
         ui32 PDiskId = 0;
 
     public:
-        NMonitoring::TPercentileTrackerLg<5, 4, 15> UpdateCycleTime;
+        TNoopPercentileTracker UpdateCycleTime;
 
     public:
         TUpdateDurationTracker()
@@ -256,88 +264,88 @@ struct TPDiskMon {
 
     // chunk states subgroup
     TIntrusivePtr<::NMonitoring::TDynamicCounters> ChunksGroup;
-    ::NMonitoring::TDynamicCounters::TCounterPtr UntrimmedFreeChunks;
-    ::NMonitoring::TDynamicCounters::TCounterPtr FreeChunks;
-    ::NMonitoring::TDynamicCounters::TCounterPtr LogChunks;
-    ::NMonitoring::TDynamicCounters::TCounterPtr UncommitedDataChunks;
-    ::NMonitoring::TDynamicCounters::TCounterPtr CommitedDataChunks;
-    ::NMonitoring::TDynamicCounters::TCounterPtr LockedChunks;
-    ::NMonitoring::TDynamicCounters::TCounterPtr QuarantineChunks;
-    ::NMonitoring::TDynamicCounters::TCounterPtr QuarantineOwners;
+    TNoopCounter UntrimmedFreeChunks;
+    TNoopCounter FreeChunks;
+    TNoopCounter LogChunks;
+    TNoopCounter UncommitedDataChunks;
+    TNoopCounter CommitedDataChunks;
+    TNoopCounter LockedChunks;
+    TNoopCounter QuarantineChunks;
+    TNoopCounter QuarantineOwners;
 
     // statistics subgroup
     TIntrusivePtr<::NMonitoring::TDynamicCounters> StatsGroup;
-    ::NMonitoring::TDynamicCounters::TCounterPtr FreeSpacePerMile;
-    ::NMonitoring::TDynamicCounters::TCounterPtr UsedSpacePerMile; // reflects PDiskUsage
-    ::NMonitoring::TDynamicCounters::TCounterPtr SplicedLogChunks;
+    TNoopCounter FreeSpacePerMile;
+    TNoopCounter UsedSpacePerMile; // reflects PDiskUsage
+    TNoopCounter SplicedLogChunks;
 
-    ::NMonitoring::TDynamicCounters::TCounterPtr TotalSpaceBytes;
-    ::NMonitoring::TDynamicCounters::TCounterPtr FreeSpaceBytes;
-    ::NMonitoring::TDynamicCounters::TCounterPtr UsedSpaceBytes;
-    ::NMonitoring::TDynamicCounters::TCounterPtr SectorMapAllocatedBytes;
+    TNoopCounter TotalSpaceBytes;
+    TNoopCounter FreeSpaceBytes;
+    TNoopCounter UsedSpaceBytes;
+    TNoopCounter SectorMapAllocatedBytes;
 
-    ::NMonitoring::TDynamicCounters::TCounterPtr NumActiveSlots;
-    ::NMonitoring::TDynamicCounters::TCounterPtr ExpectedSlotCount;
-    ::NMonitoring::TDynamicCounters::TCounterPtr SlotSizeBytes;
+    TNoopCounter NumActiveSlots;
+    TNoopCounter ExpectedSlotCount;
+    TNoopCounter SlotSizeBytes;
 
     // states subgroup
     TIntrusivePtr<::NMonitoring::TDynamicCounters> StateGroup;
-    ::NMonitoring::TDynamicCounters::TCounterPtr PDiskState;
-    ::NMonitoring::TDynamicCounters::TCounterPtr PDiskBriefState;
-    ::NMonitoring::TDynamicCounters::TCounterPtr PDiskDetailedState;
-    ::NMonitoring::TDynamicCounters::TCounterPtr AtLeastOneVDiskNotLogged;
-    ::NMonitoring::TDynamicCounters::TCounterPtr TooMuchLogChunks;
-    ::NMonitoring::TDynamicCounters::TCounterPtr SerialNumberMismatched;
+    TNoopCounter PDiskState;
+    TNoopCounter PDiskBriefState;
+    TNoopCounter PDiskDetailedState;
+    TNoopCounter AtLeastOneVDiskNotLogged;
+    TNoopCounter TooMuchLogChunks;
+    TNoopCounter SerialNumberMismatched;
     TLight L6;
     TLight L7;
     TLight IdleLight;
-    ::NMonitoring::TDynamicCounters::TCounterPtr OwnerIdsIssued;
-    ::NMonitoring::TDynamicCounters::TCounterPtr LastOwnerId;
-    ::NMonitoring::TDynamicCounters::TCounterPtr PendingYardInits;
+    TNoopCounter OwnerIdsIssued;
+    TNoopCounter LastOwnerId;
+    TNoopCounter PendingYardInits;
 
     TAtomic SeqnoL6;
     TAtomic LastDoneOperationTimestamp;
 
     // device subgroup
     TIntrusivePtr<::NMonitoring::TDynamicCounters> DeviceGroup;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceBytesRead;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceBytesWritten;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceReads;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceWrites;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceInFlightBytesRead;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceInFlightBytesWrite;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceInFlightReads;
+    TNoopCounter DeviceBytesRead;
+    TNoopCounter DeviceBytesWritten;
+    TNoopCounter DeviceReads;
+    TNoopCounter DeviceWrites;
+    TNoopCounter DeviceInFlightBytesRead;
+    TNoopCounter DeviceInFlightBytesWrite;
+    TNoopCounter DeviceInFlightReads;
     TMaxTracker MaxDeviceInFlightReads;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceInFlightWrites;
+    TNoopCounter DeviceInFlightWrites;
     TMaxTracker MaxDeviceInFlightWrites;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceTakeoffs;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceLandings;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceHaltDetected;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceExpectedSeeks;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceReadCacheHits;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceReadCacheMisses;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceWriteCacheIsValid;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceWriteCacheIsEnabled;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceOperationPoolTotalAllocations;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceOperationPoolFreeObjectsMin;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceBufferPoolFailedAllocations;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceErasureSectorRestorations;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceEstimatedCostNs;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceActualCostNs;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceOverestimationRatio;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceNonperformanceMs;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceInterruptedSystemCalls;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceSubmitThreadBusyTimeNs;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceCompletionThreadBusyTimeNs;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceIoErrors;
-    ::NMonitoring::TDynamicCounters::TCounterPtr DeviceWaitTimeMs;
+    TNoopCounter DeviceTakeoffs;
+    TNoopCounter DeviceLandings;
+    TNoopCounter DeviceHaltDetected;
+    TNoopCounter DeviceExpectedSeeks;
+    TNoopCounter DeviceReadCacheHits;
+    TNoopCounter DeviceReadCacheMisses;
+    TNoopCounter DeviceWriteCacheIsValid;
+    TNoopCounter DeviceWriteCacheIsEnabled;
+    TNoopCounter DeviceOperationPoolTotalAllocations;
+    TNoopCounter DeviceOperationPoolFreeObjectsMin;
+    TNoopCounter DeviceBufferPoolFailedAllocations;
+    TNoopCounter DeviceErasureSectorRestorations;
+    TNoopCounter DeviceEstimatedCostNs;
+    TNoopCounter DeviceActualCostNs;
+    TNoopCounter DeviceOverestimationRatio;
+    TNoopCounter DeviceNonperformanceMs;
+    TNoopCounter DeviceInterruptedSystemCalls;
+    TNoopCounter DeviceSubmitThreadBusyTimeNs;
+    TNoopCounter DeviceCompletionThreadBusyTimeNs;
+    TNoopCounter DeviceIoErrors;
+    TNoopCounter DeviceWaitTimeMs;
 
     TBytesHistogram DeviceWritesSizes;
 
     // queue subgroup
     TIntrusivePtr<::NMonitoring::TDynamicCounters> QueueGroup;
-    ::NMonitoring::TDynamicCounters::TCounterPtr QueueRequests;
-    ::NMonitoring::TDynamicCounters::TCounterPtr QueueBytes;
+    TNoopCounter QueueRequests;
+    TNoopCounter QueueBytes;
 
     // Update cycle time
     TUpdateDurationTracker UpdateDurationTracker;
@@ -349,7 +357,7 @@ struct TPDiskMon {
     TTimesHistogram DeviceFlushDuration;
 
     // <BASE_BITS, EXP_BITS, FRAME_COUNT>
-    using TDurationTracker = NMonitoring::TPercentileTrackerLg<5, 4, 15>;
+    using TDurationTracker = TNoopPercentileTracker;
     // log queue duration
     TDurationTracker LogQueueTime;
     // get queue duration
@@ -371,16 +379,16 @@ struct TPDiskMon {
     TBurstmeter BestEffortBurst;
 
     // queue length seen by arriving request in front of it (QLA = Queue Length at Arrival)
-    using TQLATracker = NMonitoring::TPercentileTrackerLg<5, 4, 15>;
+    using TQLATracker = TNoopPercentileTracker;
     TQLATracker InputQLA; // for PDisk.InputQueue
 
     // queue cost seen by arriving request in front of it (QCA = Queue Cost at Arrival)
-    using TQCATracker = NMonitoring::TPercentileTrackerLg<5, 4, 15>;
+    using TQCATracker = TNoopPercentileTracker;
     TQCATracker InputQCA; // for PDisk.InputQueue
 
     // log cumulative size bytes
     // <BASE_BITS, EXP_BITS, FRAME_COUNT>
-    using TSizeTracker = NMonitoring::TPercentileTrackerLg<5, 4, 15>;
+    using TSizeTracker = TNoopPercentileTracker;
     TSizeTracker LogOperationSizeBytes;
     TSizeTracker GetSyncLogSizeBytes;
 
@@ -414,38 +422,38 @@ struct TPDiskMon {
 
     // scheduler subgroup
     TIntrusivePtr<::NMonitoring::TDynamicCounters> SchedulerGroup;
-    ::NMonitoring::TDynamicCounters::TCounterPtr ForsetiCbsNotFound;
+    TNoopCounter ForsetiCbsNotFound;
 
     // bandwidth subgroup
     TIntrusivePtr<::NMonitoring::TDynamicCounters> BandwidthGroup;
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPLogPayload;
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPLogCommit;
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPLogSectorFooter;
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPLogRecordHeader;
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPLogPadding;
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPLogErasure;
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPLogChunkPadding;
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPLogChunkFooter;
+    TNoopCounter BandwidthPLogPayload;
+    TNoopCounter BandwidthPLogCommit;
+    TNoopCounter BandwidthPLogSectorFooter;
+    TNoopCounter BandwidthPLogRecordHeader;
+    TNoopCounter BandwidthPLogPadding;
+    TNoopCounter BandwidthPLogErasure;
+    TNoopCounter BandwidthPLogChunkPadding;
+    TNoopCounter BandwidthPLogChunkFooter;
 
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPSysLogPayload;
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPSysLogSectorFooter;
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPSysLogRecordHeader;
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPSysLogPadding;
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPSysLogErasure;
+    TNoopCounter BandwidthPSysLogPayload;
+    TNoopCounter BandwidthPSysLogSectorFooter;
+    TNoopCounter BandwidthPSysLogRecordHeader;
+    TNoopCounter BandwidthPSysLogPadding;
+    TNoopCounter BandwidthPSysLogErasure;
 
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPChunkPayload;
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPChunkSectorFooter;
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPChunkPadding;
+    TNoopCounter BandwidthPChunkPayload;
+    TNoopCounter BandwidthPChunkSectorFooter;
+    TNoopCounter BandwidthPChunkPadding;
 
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPChunkReadPayload;
-    ::NMonitoring::TDynamicCounters::TCounterPtr BandwidthPChunkReadSectorFooter;
+    TNoopCounter BandwidthPChunkReadPayload;
+    TNoopCounter BandwidthPChunkReadSectorFooter;
 
-    ::NMonitoring::TDynamicCounters::TCounterPtr WriteBufferCompactedBytes;
+    TNoopCounter WriteBufferCompactedBytes;
 
     struct TIoCounters {
-        ::NMonitoring::TDynamicCounters::TCounterPtr Requests;
-        ::NMonitoring::TDynamicCounters::TCounterPtr Bytes;
-        ::NMonitoring::TDynamicCounters::TCounterPtr Results;
+        TNoopCounter Requests;
+        TNoopCounter Bytes;
+        TNoopCounter Results;
 
         void Setup(const TIntrusivePtr<::NMonitoring::TDynamicCounters>& group, TString name, NMonitoring::TCountableBase::EVisibility vis) {
             TIntrusivePtr<::NMonitoring::TDynamicCounters> subgroup = group->GetSubgroup("req", name);
@@ -478,8 +486,8 @@ struct TPDiskMon {
     };
 
     struct TReqCounters {
-        ::NMonitoring::TDynamicCounters::TCounterPtr Requests;
-        ::NMonitoring::TDynamicCounters::TCounterPtr Results;
+        TNoopCounter Requests;
+        TNoopCounter Results;
 
         void Setup(const TIntrusivePtr<::NMonitoring::TDynamicCounters>& group, TString name, NMonitoring::TCountableBase::EVisibility vis) {
             TIntrusivePtr<::NMonitoring::TDynamicCounters> subgroup = group->GetSubgroup("req", name);
@@ -497,8 +505,8 @@ struct TPDiskMon {
     };
 
     struct TOpCounters {
-        ::NMonitoring::TDynamicCounters::TCounterPtr Requests;
-        ::NMonitoring::TDynamicCounters::TCounterPtr Bytes;
+        TNoopCounter Requests;
+        TNoopCounter Bytes;
 
         void Setup(TString metricPrefix, const TIntrusivePtr<::NMonitoring::TDynamicCounters>& group, TString opName,
                 NMonitoring::TCountableBase::EVisibility vis) {
@@ -560,11 +568,11 @@ public:
 
     // System counters - for tracking usage of CPU, memory etc.
     TIntrusivePtr<::NMonitoring::TDynamicCounters> SystemGroup;
-    ::NMonitoring::TDynamicCounters::TCounterPtr PDiskThreadCPU;
-    ::NMonitoring::TDynamicCounters::TCounterPtr SubmitThreadCPU;
-    ::NMonitoring::TDynamicCounters::TCounterPtr GetThreadCPU;
-    ::NMonitoring::TDynamicCounters::TCounterPtr TrimThreadCPU;
-    ::NMonitoring::TDynamicCounters::TCounterPtr CompletionThreadCPU;
+    TNoopCounter PDiskThreadCPU;
+    TNoopCounter SubmitThreadCPU;
+    TNoopCounter GetThreadCPU;
+    TNoopCounter TrimThreadCPU;
+    TNoopCounter CompletionThreadCPU;
 
     TPDiskMon(const TIntrusivePtr<::NMonitoring::TDynamicCounters>& counters, ui32 pdiskId, TPDiskConfig *cfg);
 

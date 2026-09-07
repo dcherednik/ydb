@@ -277,7 +277,7 @@ namespace NKikimr {
 
         template <class TMetaBase, class TLoader, int signature>
         bool InitMetabase(const TStartingPoints &startingPoints, TIntrusivePtr<TMetaBase> &metabase,
-                          bool &initFlag, NMonitoring::TDeprecatedCounter &counter, bool &emptyDb,
+                          bool &initFlag, TNoopCounter& counter, bool &emptyDb,
                           ui64 freshBufSize, ui64 compThreshold, const TActorContext &ctx) {
             TStartingPoints::const_iterator it;
             // Settings
@@ -778,4 +778,3 @@ namespace NKikimr {
     }
 
 } // NKikimr
-

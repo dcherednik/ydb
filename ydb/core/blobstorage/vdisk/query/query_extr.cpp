@@ -271,8 +271,6 @@ namespace NKikimr {
                 }
             }
             // send response and die
-            QueryCtx->PDiskReadBytes += Batcher.GetPDiskReadBytes();
-
             if (neededParts.empty()) {
                 return Finish2(ctx);
             }

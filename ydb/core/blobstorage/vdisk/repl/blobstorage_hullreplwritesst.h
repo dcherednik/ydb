@@ -99,10 +99,6 @@ namespace NKikimr {
             std::unique_ptr<IEventBase> msg = std::move(PendingPDiskMsg);
 
             if (auto write = dynamic_cast<NPDisk::TEvChunkWrite*>(msg.get())) {
-                if (write->PartsPtr) {
-                    *ReplCtx->PDiskWriteBytes += write->PartsPtr->ByteSize();
-                }
-
                 // we are issuing write message; we should count it as in flight one and take some actions according
                 // to the current state
                 ++WritesInFlight;

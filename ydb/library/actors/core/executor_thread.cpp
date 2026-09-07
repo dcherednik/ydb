@@ -93,7 +93,7 @@ namespace NActors {
     }
 
     void TExecutorThread::DropUnregistered() {
-#if defined(ACTORSLIB_COLLECT_EXEC_STATS)
+#if defined(ACTORSLIB_COLLECT_EXEC_STATS) && !defined(ACTORSLIB_DISABLE_EXEC_STATS)
         if (ActorSystem->MonitorStuckActors()) {
             if (auto *pool = dynamic_cast<TExecutorPoolBaseMailboxed*>(ThreadCtx.Pool())) {
                 with_lock (pool->StuckObserverMutex) {

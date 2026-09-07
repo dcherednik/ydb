@@ -26,13 +26,13 @@ class TCompletionEventSender : public TCompletionAction {
     TPDisk *PDisk;
     const TActorId Recipient;
     THolder<IEventBase> Event;
-    ::NMonitoring::TDynamicCounters::TCounterPtr Counter;
+    TNoopCounter Counter;
 
 public:
     THolder<TRequestBase> Req;
 
     TCompletionEventSender(TPDisk *pDisk, const TActorId &recipient, IEventBase *event,
-            ::NMonitoring::TDynamicCounters::TCounterPtr &counter)
+            TNoopCounter& counter)
         : PDisk(pDisk)
         , Recipient(recipient)
         , Event(event)

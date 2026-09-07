@@ -11,6 +11,8 @@
 //    activation time histograms
 //    event processing time histograms
 #define ACTORSLIB_COLLECT_EXEC_STATS
+// Keep the stats ABI, but compile out counter updates for the performance experiment.
+#define ACTORSLIB_DISABLE_EXEC_STATS
 
 namespace NActors {
     using TPoolId = ui8;

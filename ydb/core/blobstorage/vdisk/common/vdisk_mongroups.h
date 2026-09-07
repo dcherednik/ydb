@@ -7,6 +7,7 @@
 #include <ydb/core/protos/blobstorage_base.pb.h>
 #include <ydb/core/protos/node_whiteboard.pb.h>
 #include <ydb/core/protos/whiteboard_disk_states.pb.h>
+#include <ydb/core/mon/noop_counter.h>
 
 namespace NKikimr {
     namespace NMonGroup {
@@ -35,11 +36,13 @@ namespace NKikimr {
 
 #define COUNTER_DEF(name)                                                                   \
 protected:                                                                                  \
-    ::NMonitoring::TDynamicCounters::TCounterPtr name##_;                                     \
+    TNoopCounter name##_;                                                                     \
 public:                                                                                     \
-    NMonitoring::TDeprecatedCounter &name() { return *name##_; }                            \
-    const NMonitoring::TDeprecatedCounter &name() const { return *name##_; }                \
-    const ::NMonitoring::TDynamicCounters::TCounterPtr &name##Ptr() const { return name##_; }
+    TNoopCounter &name() { return name##_; }                                                 \
+    const TNoopCounter &name() const { return name##_; }                                     \
+    const ::NMonitoring::TDynamicCounters::TCounterPtr &name##Ptr() const {                  \
+        return name##_.GetCounterPtr();                                                       \
+    }
 
 #define COUNTER_INIT(name, derivative)                                                      \
     name##_ = GroupCounters->GetCounter(#name, derivative)
@@ -758,7 +761,7 @@ public:                                                                         
             COUNTER_DEF(PutUserData);
             COUNTER_DEF(PutAsyncBlob);
             
-            ::NMonitoring::TDeprecatedCounter &GetCounter(const std::optional<NKikimrBlobStorage::EGetHandleClass>& handleClass) {
+            TNoopCounter& GetCounter(const std::optional<NKikimrBlobStorage::EGetHandleClass>& handleClass) {
                 if (!handleClass) {
                     return Undefined();
                 }
@@ -775,7 +778,7 @@ public:                                                                         
                         return Undefined();
                 }
             }
-            ::NMonitoring::TDeprecatedCounter &GetCounter(const std::optional<NKikimrBlobStorage::EPutHandleClass>& handleClass) {
+            TNoopCounter& GetCounter(const std::optional<NKikimrBlobStorage::EPutHandleClass>& handleClass) {
                 if (!handleClass) {
                     return Undefined();
                 }
@@ -791,7 +794,7 @@ public:                                                                         
                 }
             }
 
-            ::NMonitoring::TDeprecatedCounter &GetCounter() {
+            TNoopCounter& GetCounter() {
                 return Undefined();
             }
         };
@@ -825,7 +828,7 @@ public:                                                                         
             {}
 
             template <typename THandleClassType>
-            ::NMonitoring::TDeprecatedCounter &GetCounterByHandleClass(NKikimrProto::EReplyStatus status, const std::optional<THandleClassType>& handleClass = std::nullopt) {
+            TNoopCounter& GetCounterByHandleClass(NKikimrProto::EReplyStatus status, const std::optional<THandleClassType>& handleClass = std::nullopt) {
                 switch (status) {
                     case NKikimrProto::ERROR:
                         return ResponsesWithStatusError.GetCounter(handleClass);
@@ -845,13 +848,13 @@ public:                                                                         
                 }
             }
 
-            ::NMonitoring::TDeprecatedCounter &GetCounter(NKikimrProto::EReplyStatus status) {
+            TNoopCounter& GetCounter(NKikimrProto::EReplyStatus status) {
                 return GetCounterByHandleClass(status, std::optional<NKikimrBlobStorage::EPutHandleClass>{});
             }
-            ::NMonitoring::TDeprecatedCounter &GetCounter(NKikimrProto::EReplyStatus status, const std::optional<NKikimrBlobStorage::EPutHandleClass>& handleClass) {
+            TNoopCounter& GetCounter(NKikimrProto::EReplyStatus status, const std::optional<NKikimrBlobStorage::EPutHandleClass>& handleClass) {
                 return GetCounterByHandleClass(status, handleClass);
             }
-            ::NMonitoring::TDeprecatedCounter &GetCounter(NKikimrProto::EReplyStatus status, const std::optional<NKikimrBlobStorage::EGetHandleClass>& handleClass) {
+            TNoopCounter& GetCounter(NKikimrProto::EReplyStatus status, const std::optional<NKikimrBlobStorage::EGetHandleClass>& handleClass) {
                 return GetCounterByHandleClass(status, handleClass);
             }
         };

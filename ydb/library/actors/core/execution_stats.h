@@ -37,7 +37,7 @@ namespace NActors {
 
         ~TExecutionStats();
 
-#ifdef ACTORSLIB_COLLECT_EXEC_STATS
+#if defined(ACTORSLIB_COLLECT_EXEC_STATS) && !defined(ACTORSLIB_DISABLE_EXEC_STATS)
         void GetCurrentStats(TExecutorThreadStats& statsCopy) const {
             statsCopy = TExecutorThreadStats();
             statsCopy.Aggregate(*Stats);
@@ -166,6 +166,7 @@ namespace NActors {
         void SetCurrentActivationTime(ui32, i64) {}
         inline void AddElapsedCycles(ui32, i64) {}
         inline void AddParkedCycles(i64) {}
+        inline void AddOveraddedCpuUs(i64) {}
         inline void IncrementSentEvents() {}
         inline void IncrementPreemptedEvents() {}
         inline void IncrementMailboxPushedOutByTailSending() {}

@@ -28,7 +28,7 @@ namespace NActors {
         MailboxTableHolder.Destroy();
     }
 
-#if defined(ACTORSLIB_COLLECT_EXEC_STATS)
+#if defined(ACTORSLIB_COLLECT_EXEC_STATS) && !defined(ACTORSLIB_DISABLE_EXEC_STATS)
     void TExecutorPoolBaseMailboxed::RecalculateStuckActors(TExecutorThreadStats& stats) const {
         if (!ActorSystem || !ActorSystem->MonitorStuckActors()) {
             return;
@@ -79,7 +79,7 @@ namespace NActors {
 
     bool TExecutorPoolBaseMailboxed::Send(TAutoPtr<IEventHandle>& ev) {
         Y_DEBUG_ABORT_UNLESS(ev->GetRecipientRewrite().PoolID() == PoolId);
-#ifdef ACTORSLIB_COLLECT_EXEC_STATS
+#if defined(ACTORSLIB_COLLECT_EXEC_STATS) && !defined(ACTORSLIB_DISABLE_EXEC_STATS)
         RelaxedStore(&ev->SendTime, (::NHPTimer::STime)GetCycleCountFast());
 #endif
         if (TlsThreadContext) {
@@ -105,7 +105,7 @@ namespace NActors {
 
     bool TExecutorPoolBaseMailboxed::SpecificSend(TAutoPtr<IEventHandle>& ev) {
         Y_DEBUG_ABORT_UNLESS(ev->GetRecipientRewrite().PoolID() == PoolId);
-#ifdef ACTORSLIB_COLLECT_EXEC_STATS
+#if defined(ACTORSLIB_COLLECT_EXEC_STATS) && !defined(ACTORSLIB_DISABLE_EXEC_STATS)
         RelaxedStore(&ev->SendTime, (::NHPTimer::STime)GetCycleCountFast());
 #endif
         if (TlsThreadContext) {
@@ -170,7 +170,7 @@ namespace NActors {
     TActorId TExecutorPoolBaseMailboxed::Register(IActor* actor, TMailboxCache& cache, ui64 revolvingWriteCounter, const TActorId& parentId) {
         NHPTimer::STime hpstart = GetCycleCountFast();
         TInternalActorTypeGuard<EInternalActorSystemActivity::ACTOR_SYSTEM_REGISTER, false> activityGuard(hpstart);
-#ifdef ACTORSLIB_COLLECT_EXEC_STATS
+#if defined(ACTORSLIB_COLLECT_EXEC_STATS) && !defined(ACTORSLIB_DISABLE_EXEC_STATS)
         ui32 at = actor->GetActivityType().GetIndex();
         Y_DEBUG_ABORT_UNLESS(at < Stats.ActorsAliveByActivity.size());
         if (at >= Stats.MaxActivityType()) {
@@ -179,7 +179,6 @@ namespace NActors {
         }
         AtomicIncrement(Stats.ActorsAliveByActivity[at]);
 #endif
-        AtomicIncrement(ActorRegistrations);
 
         TMailbox* mailbox = cache ? cache.Allocate() : MailboxTable->Allocate();
 
@@ -192,7 +191,7 @@ namespace NActors {
         // do init
         const TActorId actorId(ActorSystem->NodeId, PoolId, localActorId, mailbox->Hint);
         DoActorInit(ActorSystem, actor, actorId, parentId);
-#ifdef ACTORSLIB_COLLECT_EXEC_STATS
+#if defined(ACTORSLIB_COLLECT_EXEC_STATS) && !defined(ACTORSLIB_DISABLE_EXEC_STATS)
         if (ActorSystem->MonitorStuckActors()) {
             with_lock (StuckObserverMutex) {
                 Y_ABORT_UNLESS(actor->StuckIndex == Max<size_t>());
@@ -218,13 +217,12 @@ namespace NActors {
     TActorId TExecutorPoolBaseMailboxed::Register(IActor* actor, TMailbox* mailbox, const TActorId& parentId) {
         NHPTimer::STime hpstart = GetCycleCountFast();
         TInternalActorTypeGuard<EInternalActorSystemActivity::ACTOR_SYSTEM_REGISTER, false> activityGuard(hpstart);
-#ifdef ACTORSLIB_COLLECT_EXEC_STATS
+#if defined(ACTORSLIB_COLLECT_EXEC_STATS) && !defined(ACTORSLIB_DISABLE_EXEC_STATS)
         ui32 at = actor->GetActivityType().GetIndex();
         if (at >= Stats.MaxActivityType())
             at = 0;
         AtomicIncrement(Stats.ActorsAliveByActivity[at]);
 #endif
-        AtomicIncrement(ActorRegistrations);
 
         // Empty mailboxes are currently pending for reclamation
         Y_ABORT_UNLESS(!mailbox->IsEmpty(),
@@ -236,7 +234,7 @@ namespace NActors {
         const TActorId actorId(ActorSystem->NodeId, PoolId, localActorId, mailbox->Hint);
         DoActorInit(ActorSystem, actor, actorId, parentId);
 
-#ifdef ACTORSLIB_COLLECT_EXEC_STATS
+#if defined(ACTORSLIB_COLLECT_EXEC_STATS) && !defined(ACTORSLIB_DISABLE_EXEC_STATS)
         if (ActorSystem->MonitorStuckActors()) {
             with_lock (StuckObserverMutex) {
                 Y_ABORT_UNLESS(actor->StuckIndex == Max<size_t>());

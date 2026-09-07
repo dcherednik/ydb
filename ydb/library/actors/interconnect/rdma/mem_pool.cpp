@@ -521,7 +521,6 @@ namespace NInterconnect::NRdma {
                 return nullptr;
             }
 
-            AllocatedChunksCounter->Inc();
             AllocatedChunks++;
 
             auto chunk = MakeIntrusive<TChunk>(std::move(mrs), this);
@@ -540,7 +539,6 @@ namespace NInterconnect::NRdma {
                 const std::lock_guard<std::mutex> lock(Mutex);
                 chunk->Unlink();
                 AllocatedChunks--;
-                AllocatedChunksCounter->Dec();
             }
             if (mrs.empty()) {
                 return;
@@ -560,19 +558,8 @@ namespace NInterconnect::NRdma {
             mrs.clear();
         }
 
-        void TrackPeakAlloc(i64 newVal) noexcept {
-            i64 curVal = MaxAllocated.Val.load(std::memory_order_relaxed);
-            while (newVal > curVal) {
-                if (MaxAllocated.Val.compare_exchange_weak(curVal, newVal,
-                    std::memory_order_release, std::memory_order_relaxed)) {
-                    break;
-                }
-            }
-        }
     private:
         TChunkPtr TryReclaim(size_t size) noexcept {
-            ReclaimationRunCounter->Inc();
-
             auto it = ReclaimIt;
 
             for (; it!= Chunks.End(); it++) {
@@ -592,7 +579,6 @@ namespace NInterconnect::NRdma {
                 }
             }
 
-            ReclaimationFailCounter->Inc();
             return nullptr;
         }
 
@@ -617,13 +603,7 @@ namespace NInterconnect::NRdma {
         TIntrusiveList<TChunk>::TIterator ReclaimIt;
 
         void Tick(NMonotonic::TMonotonic time) noexcept override {
-            constexpr TDuration holdTime = TDuration::Seconds(15);
-
-            if (time - MaxAllocated.Time > holdTime) {
-                MaxAllocated.Counter->Set(MaxAllocated.Val.load());
-                MaxAllocated.Val.store(AllocatedCounter->Val());
-                MaxAllocated.Time = time;
-            }
+            Y_UNUSED(time);
         }
     };
 
@@ -939,16 +919,11 @@ namespace NInterconnect::NRdma {
         TMemRegionPtr AllocImpl(int size, ui32 flags) noexcept override {
             if (auto memReg = LocalCache.AllocImpl(size, flags, *this)) {
                 memReg->Resize(size);
-                i64 newVal = AllocatedCounter->Add(size);
-
-                TrackPeakAlloc(newVal);
-
                 return memReg;
             }
             return nullptr;
         }
         void Free(TMemRegion&& mr, TChunk&) noexcept override {
-            AllocatedCounter->Sub(mr.GetSize());
             LocalCache.Free(std::move(mr), *this);
         }
 

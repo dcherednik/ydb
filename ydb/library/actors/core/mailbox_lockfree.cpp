@@ -518,7 +518,7 @@ namespace NActors {
     void TMailbox::PushFront(TAutoPtr<IEventHandle>& evPtr) noexcept {
         IEventHandle* ev = evPtr.Release();
 
-#ifdef ACTORSLIB_COLLECT_EXEC_STATS
+#if defined(ACTORSLIB_COLLECT_EXEC_STATS) && !defined(ACTORSLIB_DISABLE_EXEC_STATS)
         // This is similar to sending the event again
         ev->SendTime = (::NHPTimer::STime)GetCycleCountFast();
 #endif

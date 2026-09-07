@@ -444,7 +444,7 @@ namespace NKikimr {
             Finalized = true;
 
             if (CounterPtr) {
-                CounterPtr->Inc();
+                // Atomic monitoring counters are disabled for the performance experiment.
             }
 
             if (HistoPtr) {

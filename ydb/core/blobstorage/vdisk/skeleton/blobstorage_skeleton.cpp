@@ -89,8 +89,8 @@ namespace NKikimr {
             auto ev = std::make_unique<NNodeWhiteboard::TEvWhiteboard::TEvVDiskStateUpdate>(&satisfactionRank);
             const TInstant now = ctx.Now();
             const TInstant prev = std::exchange(WhiteboardUpdateTimestamp, now);
-            const ui64 bytesRead = QueryCtx ? QueryCtx->PDiskReadBytes.exchange(0) : 0;
-            const ui64 bytesWritten = PDiskWriteBytes->exchange(0);
+            const ui64 bytesRead = 0;
+            const ui64 bytesWritten = 0;
             const TDuration delta = now - prev;
             if (delta != TDuration::Zero() && prev != TInstant::Zero()) {
                 auto& record = ev->Record;
@@ -439,8 +439,7 @@ namespace NKikimr {
         };
 
         void UpdatePDiskWriteBytes(size_t size) {
-            *PDiskWriteBytes += size; // actual size for small blobs may be up to one block, but it may be
-            // batched along with other VDisk log entries on the PDisk
+            Y_UNUSED(size);
         }
 
         template<typename TEvResult> struct TLoggedRecType {};
@@ -2681,7 +2680,6 @@ namespace NKikimr {
             }
             if (LastEventsQueueSize == 0) {
                 auto events = TlsActivationContext->Mailbox.CountMailboxEvents(SelfId().LocalId(), 128);
-                ActorQueueLight.Set(events.first >= 64, ++ActorQueueSeqNo);
                 LastEventsQueueSize = events.first;
             }
         }
@@ -3091,10 +3089,9 @@ namespace NKikimr {
         TSnapshotExpirationMap SnapshotExpirationMap;
         std::deque<TMonotonic> SnapshotExpirationCheckSchedule;
 
-        ::NMonitoring::TDynamicCounters::TCounterPtr SkeletonBusyTimeUs;
+        TNoopCounter SkeletonBusyTimeUs;
         size_t LastEventsQueueSize = 0;
         TLight ActorQueueLight;
-        ui16 ActorQueueSeqNo = 0;
     };
 
     ////////////////////////////////////////////////////////////////////////////

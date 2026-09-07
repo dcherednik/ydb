@@ -1,6 +1,8 @@
 #pragma once
 #include "defs.h"
 
+#include <ydb/core/mon/noop_counter.h>
+
 #include <library/cpp/monlib/dynamic_counters/counters.h>
 
 #include <util/generic/algorithm.h>
@@ -19,12 +21,12 @@ class TFreeChunks {
 protected:
     TDeque<TChunkIdx> FreeChunks; // TODO(cthulhu): preallocate and use a vector here to reduce allocation count.
     TAtomic FreeChunkCount;
-    ::NMonitoring::TDynamicCounters::TCounterPtr MonFreeChunks;
+    TNoopCounter MonFreeChunks;
     ui64 OutOfOrderCount;
     const ui64 SortFreeChunksPerItems;
     bool SortingEnabled = true;
 public:
-    TFreeChunks(::NMonitoring::TDynamicCounters::TCounterPtr &monFreeChunks, ui64 sortFreeChunksPerItems)
+    TFreeChunks(TNoopCounter& monFreeChunks, ui64 sortFreeChunksPerItems)
         : FreeChunkCount(0)
         , MonFreeChunks(monFreeChunks)
         , OutOfOrderCount(0)

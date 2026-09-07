@@ -1068,14 +1068,76 @@ namespace {
         std::vector<std::tuple<ui32, NMonitoring::IIntGauge*>> Starvation_;
     };
 
+    class TInterconnectMetricsNoop final : public IInterconnectMetrics {
+    public:
+        void AddInflightDataAmount(ui64) override {}
+        void AddInflightRdmaDataAmount(ui64) override {}
+        void SubInflightDataAmount(ui64) override {}
+        void SubInflightRdmaDataAmount(ui64) override {}
+        void AddTotalBytesWritten(ui64) override {}
+        void SetClockSkewMicrosec(i64) override {}
+        void IncSessionDeaths() override {}
+        void IncHandshakeFails() override {}
+        void SetConnected(ui32) override {}
+        void SetRdmaRetryWatchdogPending(ui32) override {}
+        void IncSubscribersCount() override {}
+        void SubSubscribersCount(ui32) override {}
+
+        void SubOutputBuffersTotalSize(ui64 value) override {
+            OutputBuffersTotalSize -= value;
+        }
+
+        void AddOutputBuffersTotalSize(ui64 value) override {
+            OutputBuffersTotalSize += value;
+        }
+
+        ui64 GetOutputBuffersTotalSize() const override {
+            return OutputBuffersTotalSize;
+        }
+
+        void IncDisconnections() override {}
+        void IncUsefulWriteWakeups() override {}
+        void IncSpuriousWriteWakeups() override {}
+        void IncSendSyscalls(ui64) override {}
+        void IncInflyLimitReach() override {}
+        void IncDisconnectByReason(const TString&) override {}
+        void IncUsefulReadWakeups() override {}
+        void IncSpuriousReadWakeups() override {}
+
+        void SetPeerInfo(const TString& name, const TString& dataCenterId, const TString&) override {
+            HumanFriendlyPeerHostName = name;
+            DataCenterId = dataCenterId;
+        }
+
+        void SetPeerScopeId(const TScopeId&) override {}
+        void AddInputChannelsIncomingTraffic(ui16, ui64) override {}
+        void IncInputChannelsIncomingEvents(ui16) override {}
+        void IncScopeErrors() override {}
+        void IncRecvSyscalls(ui64) override {}
+        void AddTotalBytesRead(ui64) override {}
+        void UpdatePingTimeHistogram(ui64) override {}
+        void UpdateIcQueueTimeHistogram(ui64) override {}
+        void UpdateNumEventsInQueueHistogram(ui64) override {}
+        void UpdateRdmaReadTimeHistogram(ui64) override {}
+        void UpdateOutputChannelTraffic(ui16, ui64) override {}
+        void UpdateOutputChannelEvents(ui16) override {}
+        void SetUtilization(ui32, ui32) override {}
+        void IncRdmaMultipartEvents() override {}
+
+    private:
+        ui64 OutputBuffersTotalSize = 0;
+    };
+
 } // namespace
 
 std::unique_ptr<IInterconnectMetrics> CreateInterconnectCounters(const TInterconnectProxyCommon::TPtr& common) {
-    return std::make_unique<TInterconnectCounters>(common);
+    Y_UNUSED(common);
+    return std::make_unique<TInterconnectMetricsNoop>();
 }
 
 std::unique_ptr<IInterconnectMetrics> CreateInterconnectMetrics(const TInterconnectProxyCommon::TPtr& common) {
-    return std::make_unique<TInterconnectMetrics>(common);
+    Y_UNUSED(common);
+    return std::make_unique<TInterconnectMetricsNoop>();
 }
 
 } // NActors

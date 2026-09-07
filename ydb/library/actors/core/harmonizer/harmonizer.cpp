@@ -159,7 +159,6 @@ void THarmonizer::ProcessStarvedState() {
         }
         while (threadCount > pool.DefaultFullThreadCount) {
             pool.SetFullThreadCount(--threadCount);
-            pool.DecreasingThreadsByStarvedState.fetch_add(1, std::memory_order_relaxed);
             CpuConsumption.AdditionalThreads--;
             CpuConsumption.StoppingThreads++;
             SetForeignThreadSlotsForCurrentFullThreadCount(poolIdx);
@@ -193,7 +192,6 @@ void THarmonizer::ProcessNeedyState() {
         float extraForeignElapsed = std::max(0.0f, foreignElapsed - std::max(0, SharedInfo.ForeignThreadsAllowed[needyPoolIdx] - 1));
         bool allowedNextThreadCount = pool.GetFullThreadCount() + 1 <= pool.MaxFullThreadCount;
         if (ProcessingBudget > 0.0 && ProcessingBudget + extraForeignElapsed >= 1.0 && allowedNextThreadCount) {
-            pool.IncreasingThreadsByNeedyState.fetch_add(1, std::memory_order_relaxed);
             CpuConsumption.IsNeedyByPool[needyPoolIdx] = false;
             CpuConsumption.AdditionalThreads++;
             pool.SetFullThreadCount(fullThreadCount + 1);
@@ -238,7 +236,6 @@ void THarmonizer::ProcessExchange() {
         if (!CpuConsumption.IsNeedyByPool[needyPoolIdx]) {
             continue;
         }
-        pool.IncreasingThreadsByExchange.fetch_add(1, std::memory_order_relaxed);
         CpuConsumption.IsNeedyByPool[needyPoolIdx] = false;
         takingAwayThreads++;
         pool.SetFullThreadCount(fullThreadCount + 1);
@@ -264,7 +261,6 @@ void THarmonizer::ProcessExchange() {
         pool.SetFullThreadCount(fullThreadCount - currentTakingAwayThreads);
         SetForeignThreadSlotsForCurrentFullThreadCount(poolIdx);
 
-        pool.DecreasingThreadsByExchange.fetch_add(currentTakingAwayThreads, std::memory_order_relaxed);
         LWPROBE_WITH_DEBUG(HarmonizeOperation, poolIdx, pool.Pool->GetName(), "decrease by exchanging", fullThreadCount - currentTakingAwayThreads, pool.DefaultFullThreadCount, pool.MaxFullThreadCount);
     }
 }
@@ -275,7 +271,6 @@ void THarmonizer::ProcessHoggishState() {
         TPoolInfo &pool = *Pools[hoggishPoolIdx];
         i64 fullThreadCount = pool.GetFullThreadCount();
         if (fullThreadCount > pool.MinFullThreadCount && freeCpu >= 1) {
-            pool.DecreasingThreadsByHoggishState.fetch_add(1, std::memory_order_relaxed);
             pool.SetFullThreadCount(fullThreadCount - 1);
             SetForeignThreadSlotsForCurrentFullThreadCount(hoggishPoolIdx);
             LWPROBE_WITH_DEBUG(HarmonizeOperation, hoggishPoolIdx, pool.Pool->GetName(), "decrease by hoggish", fullThreadCount - 1, pool.DefaultFullThreadCount, pool.MaxFullThreadCount);
@@ -289,7 +284,7 @@ void THarmonizer::ProcessHoggishState() {
 }
 
 void THarmonizer::HarmonizeImpl(ui64 ts) {
-    HARMONIZER_DEBUG_PRINT("HarmonizeImpl", "Iteration", Iteration.fetch_add(1, std::memory_order_relaxed));
+    HARMONIZER_DEBUG_PRINT("HarmonizeImpl");
     Y_UNUSED(ts);
     Budget.store(CpuConsumption.Budget, std::memory_order_relaxed);
     SharedFreeCpu.store(SharedInfo.FreeCpu, std::memory_order_relaxed);

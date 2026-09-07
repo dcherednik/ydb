@@ -166,40 +166,14 @@ void LogOOSStatus(ui32 flags, const TLogoBlobID& blobId, const TString& vDiskLog
 }
 
 void UpdateMonOOSStatus(ui32 flags, const std::shared_ptr<NMonGroup::TOutOfSpaceGroup>& monGroup) {
-    if (!monGroup) {
-        return;
-    }
-    if (!(flags & NKikimrBlobStorage::StatusIsValid)) {
-        return;
-    }
-
-    if (flags & NKikimrBlobStorage::StatusDiskSpaceRed) {
-        monGroup->ResponsesWithDiskSpaceRed().Inc();
-    } else if (flags & NKikimrBlobStorage::StatusDiskSpaceOrange) {
-        monGroup->ResponsesWithDiskSpaceOrange().Inc();
-    } else if (flags & NKikimrBlobStorage::StatusDiskSpaceLightOrange) {
-        monGroup->ResponsesWithDiskSpaceLightOrange().Inc();
-    } else if (flags & NKikimrBlobStorage::StatusDiskSpacePreOrange) {
-        monGroup->ResponsesWithDiskSpacePreOrange().Inc();
-    } else if (flags & NKikimrBlobStorage::StatusDiskSpaceYellowStop) {
-        monGroup->ResponsesWithDiskSpaceYellowStop().Inc();
-    } else if (flags & NKikimrBlobStorage::StatusDiskSpaceLightYellowMove) {
-        monGroup->ResponsesWithDiskSpaceLightYellowMove().Inc();
-    }
+    Y_UNUSED(flags);
+    Y_UNUSED(monGroup);
 }
 
 void UpdateMonResponseStatus(NKikimrProto::EReplyStatus status, const TCommonHandleClass& handleClass, const std::shared_ptr<NMonGroup::TResponseStatusGroup>& monGroup) {
-    if (!monGroup) {
-        return;
-    }
-
-    if (std::holds_alternative<NKikimrBlobStorage::EPutHandleClass>(handleClass.HandleClass)) {
-        monGroup->GetCounter(status, std::get<NKikimrBlobStorage::EPutHandleClass>(handleClass.HandleClass)).Inc();
-    } else if (std::holds_alternative<NKikimrBlobStorage::EGetHandleClass>(handleClass.HandleClass)) {
-        monGroup->GetCounter(status, std::get<NKikimrBlobStorage::EGetHandleClass>(handleClass.HandleClass)).Inc();
-    } else {
-        monGroup->GetCounter(status).Inc();
-    }
+    Y_UNUSED(status);
+    Y_UNUSED(handleClass);
+    Y_UNUSED(monGroup);
 }
 
 } //NKikimr

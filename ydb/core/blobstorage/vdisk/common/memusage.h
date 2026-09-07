@@ -2,6 +2,8 @@
 
 #include "defs.h"
 
+#include <ydb/core/mon/noop_counter.h>
+
 #include <library/cpp/monlib/dynamic_counters/counters.h>
 
 #include <util/generic/buffer.h>
@@ -12,7 +14,7 @@
 namespace NKikimr {
 
     class TMemoryConsumer {
-        ::NMonitoring::TDynamicCounters::TCounterPtr Counter;
+        TNoopCounter Counter;
 
     public:
         TMemoryConsumer(::NMonitoring::TDynamicCounters::TCounterPtr counter)
@@ -31,11 +33,11 @@ namespace NKikimr {
         }
 
         void Delta(ssize_t bytes) {
-            *Counter += static_cast<i64>(bytes);
+            Y_UNUSED(bytes);
         }
 
         ::NMonitoring::TDynamicCounters::TCounterPtr GetCounter() const {
-            return Counter;
+            return Counter.GetCounterPtr();
         }
     };
 

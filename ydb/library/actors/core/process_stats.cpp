@@ -279,19 +279,7 @@ namespace {
         }
 
         void UpdateCounters(const TProcStat& procStat) {
-            *VmSize = procStat.Vsize;
-            *AnonRssSize = procStat.AnonRss;
-            *FileRssSize = procStat.FileRss;
-            if (procStat.CGroupMemLim) {
-                *CGroupMemLimit = procStat.CGroupMemLim;
-            }
-            *UserTime = procStat.Utime;
-            *SysTime = procStat.Stime;
-            *MinorPageFaults = procStat.MinFlt;
-            *MajorPageFaults = procStat.MajFlt;
-            *UptimeSeconds = procStat.Uptime.Seconds();
-            *NumThreads = procStat.NumThreads;
-            *SystemUptimeSeconds = procStat.SystemUptime.Seconds();
+            Y_UNUSED(procStat);
         }
 
     private:
@@ -330,28 +318,7 @@ namespace {
         }
 
         void UpdateCounters(const TProcStat& procStat) {
-            VmSize->Set(procStat.Vsize);
-            AnonRssSize->Set(procStat.AnonRss);
-            FileRssSize->Set(procStat.FileRss);
-            CGroupMemLimit->Set(procStat.CGroupMemLim);
-            UptimeSeconds->Set(procStat.Uptime.Seconds());
-            NumThreads->Set(procStat.NumThreads);
-            SystemUptimeSeconds->Set(procStat.SystemUptime.Seconds());
-
-            // it is ok here to reset and add metric value, because mutation
-            // is performed in single threaded context
-
-            UserTime->Reset();
-            UserTime->Add(procStat.Utime);
-
-            SysTime->Reset();
-            SysTime->Add(procStat.Stime);
-
-            MinorPageFaults->Reset();
-            MinorPageFaults->Add(procStat.MinFlt);
-
-            MajorPageFaults->Reset();
-            MajorPageFaults->Add(procStat.MajFlt);
+            Y_UNUSED(procStat);
         }
 
     private:
@@ -378,36 +345,7 @@ namespace {
         }
 
         void UpdateCounters(const TProcStat& procStat) {
-            std::shared_ptr<NMonitoring::TMetricRegistry> registry = Registry.lock();
-            if (registry) {
-                registry->IntGauge({{"sensor", "process.VmSize"}})->Set(procStat.Vsize);
-                registry->IntGauge({{"sensor", "process.AnonRssSize"}})->Set(procStat.AnonRss);
-                registry->IntGauge({{"sensor", "process.FileRssSize"}})->Set(procStat.FileRss);
-                registry->IntGauge({{"sensor", "process.CGroupMemLimit"}})->Set(procStat.CGroupMemLim);
-                registry->IntGauge({{"sensor", "process.UptimeSeconds"}})->Set(procStat.Uptime.Seconds());
-                registry->IntGauge({{"sensor", "process.NumThreads"}})->Set(procStat.NumThreads);
-                registry->IntGauge({{"sensor", "system.UptimeSeconds"}})->Set(procStat.SystemUptime.Seconds());
-
-                // it is ok here to reset and add metric value, because mutation
-                // is performed in single threaded context
-
-                NMonitoring::TRate* userTime = registry->Rate({{"sensor", "process.UserTime"}});
-                NMonitoring::TRate* sysTime = registry->Rate({{"sensor", "process.SystemTime"}});
-                NMonitoring::TRate* minorPageFaults = registry->Rate({{"sensor", "process.MinorPageFaults"}});
-                NMonitoring::TRate* majorPageFaults = registry->Rate({{"sensor", "process.MajorPageFaults"}});
-
-                userTime->Reset();
-                userTime->Add(procStat.Utime);
-
-                sysTime->Reset();
-                sysTime->Add(procStat.Stime);
-
-                minorPageFaults->Reset();
-                minorPageFaults->Add(procStat.MinFlt);
-
-                majorPageFaults->Reset();
-                majorPageFaults->Add(procStat.MajFlt);
-            }
+            Y_UNUSED(procStat);
         }
 
     private:

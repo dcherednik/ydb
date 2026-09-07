@@ -420,19 +420,9 @@ void TPDiskMon::UpdatePercentileTrackers() {
     InputQLA.Update();
     InputQCA.Update();
 
-    MaxDeviceInFlightReads.Update();
-    MaxDeviceInFlightWrites.Update();
 }
 
 void TPDiskMon::UpdateLights() {
-    if (HPSecondsFloat(std::abs(HPNow() - AtomicGet(LastDoneOperationTimestamp))) > 15.0) {
-        auto seqnoL6 = AtomicGetAndIncrement(SeqnoL6);
-        L6.Set(false, seqnoL6);
-    }
-
-    L6. Update();
-    L7. Update();
-    IdleLight.Update();
 }
 
 bool TPDiskMon::UpdateDeviceHaltCounters() {

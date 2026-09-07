@@ -60,7 +60,7 @@ namespace NKikimr {
                 TActivationContext::Schedule(timeout, ev.release());
                 const ui64 deltaMicrosec = quoter->MergeThrottledIntervalAndGetDeltaMicrosec(now, timeout);
                 if (throttledCounter && deltaMicrosec) {
-                    throttledCounter->Add(deltaMicrosec);
+                    Y_UNUSED(deltaMicrosec);
                 }
             } else {
                 TActivationContext::Send(ev.release());

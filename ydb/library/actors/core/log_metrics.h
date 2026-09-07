@@ -38,25 +38,18 @@ public:
     ~TLoggerCounters() = default;
 
     void IncActorMsgs() override {
-        ++*ActorMsgs_;
     }
     void IncDirectMsgs() override {
-        ++*DirectMsgs_;
     }
     void IncLevelRequests() override {
-        ++*LevelRequests_;
     }
     void IncIgnoredMsgs() override {
-        ++*IgnoredMsgs_;
     }
     void IncAlertMsgs() override {
-        ++*AlertMsgs_;
     }
     void IncEmergMsgs() override {
-        ++*EmergMsgs_;
     }
     void IncDroppedMsgs() override {
-        DroppedMsgs_->Inc();
     }
 
     void GetOutputHtml(IOutputStream& str) override {
@@ -103,25 +96,18 @@ public:
     ~TLoggerMetrics() = default;
 
     void IncActorMsgs() override {
-        ActorMsgs_->Inc();
     }
     void IncDirectMsgs() override {
-        DirectMsgs_->Inc();
     }
     void IncLevelRequests() override {
-        LevelRequests_->Inc();
     }
     void IncIgnoredMsgs() override {
-        IgnoredMsgs_->Inc();
     }
     void IncAlertMsgs() override {
-        AlertMsgs_->Inc();
     }
     void IncEmergMsgs() override {
-        EmergMsgs_->Inc();
     }
     void IncDroppedMsgs() override {
-        DroppedMsgs_->Inc();
     }
 
     void GetOutputHtml(IOutputStream& str) override {

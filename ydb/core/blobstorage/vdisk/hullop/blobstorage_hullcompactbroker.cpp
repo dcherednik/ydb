@@ -4,6 +4,7 @@
 #include <ydb/core/blobstorage/vdisk/common/vdisk_events.h>
 #include <ydb/core/blobstorage/backpressure/queue_backpressure_client.h>
 #include <ydb/core/base/counters.h>
+#include <ydb/core/mon/noop_counter.h>
 #include <util/generic/hash_set.h>
 #include <util/generic/queue.h>
 #include <util/datetime/base.h>
@@ -14,12 +15,12 @@ namespace NKikimr {
     struct TCompBrokerMon : public TThrRefBase {
         TIntrusivePtr<::NMonitoring::TDynamicCounters> Group;
         
-        NMonitoring::TDynamicCounters::TCounterPtr CompBrokerPendingCompactions;
-        NMonitoring::TDynamicCounters::TCounterPtr CompBrokerActiveCompactions;
+        TNoopCounter CompBrokerPendingCompactions;
+        TNoopCounter CompBrokerActiveCompactions;
         
-        NMonitoring::TDynamicCounters::TCounterPtr CompBrokerTokenRequests;
-        NMonitoring::TDynamicCounters::TCounterPtr CompBrokerTokenGrants;
-        NMonitoring::TDynamicCounters::TCounterPtr CompBrokerTokenReleases;
+        TNoopCounter CompBrokerTokenRequests;
+        TNoopCounter CompBrokerTokenGrants;
+        TNoopCounter CompBrokerTokenReleases;
         
         TCompBrokerMon(TIntrusivePtr<::NMonitoring::TDynamicCounters>& counters)
             : Group(GetServiceCounters(counters, "storage_utils"))

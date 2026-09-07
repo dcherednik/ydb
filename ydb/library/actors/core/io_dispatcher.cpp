@@ -123,7 +123,6 @@ namespace NActors {
                     }
                     for (TTask& task : tasks) {
                         task.Execute();
-                        ++*Actor.TasksCompleted;
                     }
                 }
                 return nullptr;
@@ -139,15 +138,13 @@ namespace NActors {
             auto thread = std::make_unique<TThread>(*this, TActivationContext::ActorSystem());
             const TThread::TId id = thread->Id();
             Threads.emplace(id, std::move(thread));
-            *NumThreads = ++NumRunningThreads;
-            ++*ThreadsStarted;
+            ++NumRunningThreads;
         }
 
         void StopThread() {
             Y_ABORT_UNLESS(Threads.size());
             TaskQueue.StopOne();
-            *NumThreads = --NumRunningThreads;
-            ++*ThreadsStopped;
+            --NumRunningThreads;
         }
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -191,7 +188,6 @@ namespace NActors {
         }
 
         void Handle(TEvInvokeQuery::TPtr ev) {
-            ++*TasksAdded;
             TaskQueue.Enqueue(TActivationContext::Now(), ev->Get());
         }
 

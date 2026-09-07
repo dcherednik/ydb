@@ -154,9 +154,7 @@ class TRealBlockDevice : public IBlockDevice {
                 if (totalSize >= MaxQueuedActions) {
                     // We have a risk to run out of buffers from BufferPool, so MaxQueuedActions is expected
                     // to counter that
-                    Device.Mon.L7.Set(true, AtomicGetAndIncrement(SeqnoL7));
                     Sleep(TDuration::MilliSeconds(1));
-                    Device.Mon.L7.Set(false, AtomicGetAndIncrement(SeqnoL7));
                     continue;
                 }
 
@@ -215,7 +213,6 @@ class TRealBlockDevice : public IBlockDevice {
     private:
         TRealBlockDevice &Device;
         const size_t MaxQueuedActions;
-        TAtomic SeqnoL7 = 0;
     };
 
     class TSubmitThreadBase : public TThread {
@@ -507,8 +504,6 @@ class TRealBlockDevice : public IBlockDevice {
                     completionAction->FlushAction = nullptr;
                 }
                 Device.CompletionThreads->Schedule(completionAction);
-                auto seqnoL6 = AtomicGetAndIncrement(Device.Mon.SeqnoL6);
-                Device.Mon.L6.Set(duration > Device.Reordering, seqnoL6);
             }
 
             if (isSeekExpected) {
@@ -816,7 +811,6 @@ private:
 
     bool IsFileOpened;
     bool IsInitialized;
-    ui64 Reordering;
     ui64 SeekCostNs;
     bool IsTrimEnabled;
     const ui32 MaxQueuedCompletionActions; // for all threads
@@ -855,7 +849,6 @@ public:
         , SubmitThread(nullptr)
         , IsFileOpened(false)
         , IsInitialized(false)
-        , Reordering(reorderingCycles)
         , SeekCostNs(seekCostNs)
         , IsTrimEnabled(true)
         , MaxQueuedCompletionActions(maxQueuedCompletionActions)
@@ -868,6 +861,7 @@ public:
         , LastWarning(IsPowerOf2(deviceInFlight) ? "" : "Device inflight must be a power of 2")
         , ReadOnly(readOnly)
     {
+        Y_UNUSED(reorderingCycles);
         if (sectorMap) {
             DriveData = TDriveData();
             DriveData->Path = path;
@@ -968,12 +962,10 @@ protected:
             case IAsyncIoOperation::EType::PWrite:
                 (*Mon.DeviceInFlightBytesWrite) += size;
                 Mon.DeviceInFlightWrites->Inc();
-                Mon.MaxDeviceInFlightWrites.Collect(*Mon.DeviceInFlightWrites);
                 break;
             case IAsyncIoOperation::EType::PRead:
                 (*Mon.DeviceInFlightBytesRead) += size;
                 Mon.DeviceInFlightReads->Inc();
-                Mon.MaxDeviceInFlightReads.Collect(*Mon.DeviceInFlightReads);
                 break;
             default:
                 break;

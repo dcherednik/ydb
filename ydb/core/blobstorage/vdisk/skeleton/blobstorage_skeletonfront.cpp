@@ -186,15 +186,14 @@ namespace NKikimr {
             const TString Name;
 
         private:
-            ::NMonitoring::TDynamicCounters::TCounterPtr SkeletonFrontInFlightCount;
+            TNoopCounter SkeletonFrontInFlightCount;
             TMaxTracker SkeletonFrontMaxInFlightCount;
-            ::NMonitoring::TDynamicCounters::TCounterPtr SkeletonFrontInFlightCost;
-            ::NMonitoring::TDynamicCounters::TCounterPtr SkeletonFrontInFlightBytes;
-            ::NMonitoring::TDynamicCounters::TCounterPtr SkeletonFrontDelayedCount;
-            ::NMonitoring::TDynamicCounters::TCounterPtr SkeletonFrontDelayedBytes;
-            ::NMonitoring::TDynamicCounters::TCounterPtr SkeletonFrontCostProcessed;
+            TNoopCounter SkeletonFrontInFlightCost;
+            TNoopCounter SkeletonFrontInFlightBytes;
+            TNoopCounter SkeletonFrontDelayedCount;
+            TNoopCounter SkeletonFrontDelayedBytes;
+            TNoopCounter SkeletonFrontCostProcessed;
             TLight IdleLight;
-            ui16 IdleLightSeqNo = 0;
 
             bool CanSendToSkeleton(ui64 cost) const {
                 bool inFlightCond = InFlightCount < MaxInFlightCount;
@@ -254,7 +253,6 @@ namespace NKikimr {
                 if (!Queue->Head() && CanSendToSkeleton(cost)) {
                     // send to Skeleton for further processing
                     ctx.Send(converted.release());
-                    IdleLight.Set(true, ++IdleLightSeqNo);
                     ++InFlightCount;
                     InFlightCost += cost;
                     InFlightBytes += recByteSize;
@@ -294,7 +292,6 @@ namespace NKikimr {
                 InFlightCount = 0;
                 InFlightCost = 0;
                 InFlightBytes = 0;
-                IdleLight.Set(true, ++IdleLightSeqNo);
                 *SkeletonFrontInFlightCount = 0;
                 *SkeletonFrontInFlightCost = 0;
                 *SkeletonFrontInFlightBytes = 0;
@@ -333,7 +330,6 @@ namespace NKikimr {
                         } else {
                             ctx.Send(rec->Ev.release());
 
-                            IdleLight.Set(true, ++IdleLightSeqNo);
                             ++InFlightCount;
                             InFlightCost += cost;
                             InFlightBytes += recByteSize;
@@ -369,7 +365,6 @@ namespace NKikimr {
                          InFlightCount, InFlightBytes, InFlightCost, msgCtx.ToString().data(), Deadlines);
 
                 --InFlightCount;
-                IdleLight.Set(InFlightCount == 0, ++IdleLightSeqNo);
                 InFlightCost -= msgCtx.Cost;
                 InFlightBytes -= msgCtx.RecByteSize;
 
@@ -507,7 +502,6 @@ namespace NKikimr {
 
             // refresh statistics for window-based counters
             void UpdateCounters() {
-                IdleLight.Update();
                 SkeletonFrontMaxInFlightCount.Update();
             }
         };
@@ -521,9 +515,9 @@ namespace NKikimr {
             std::unique_ptr<TMyQueueBackpressure> QueueBackpressure;
             NKikimrBlobStorage::EVDiskQueueId ExtQueueId;
             TString Name;
-            ::NMonitoring::TDynamicCounters::TCounterPtr SkeletonFrontDeadline;
-            ::NMonitoring::TDynamicCounters::TCounterPtr SkeletonFrontOverflow;
-            ::NMonitoring::TDynamicCounters::TCounterPtr SkeletonFrontIncorrectMsgId;
+            TNoopCounter SkeletonFrontDeadline;
+            TNoopCounter SkeletonFrontOverflow;
+            TNoopCounter SkeletonFrontIncorrectMsgId;
 
             void NotifyOtherClients(const TActorContext &ctx, const TFeedback &feedback) {
                 for (const auto &x : feedback.second) {
@@ -710,7 +704,7 @@ namespace NKikimr {
         TIntrusivePtr<::NMonitoring::TDynamicCounters> VDiskCountersBase;
         TIntrusivePtr<::NMonitoring::TDynamicCounters> VDiskCounters;
         TIntrusivePtr<::NMonitoring::TDynamicCounters> SkeletonFrontGroup;
-        ::NMonitoring::TDynamicCounters::TCounterPtr AccessDeniedMessages;
+        TNoopCounter AccessDeniedMessages;
         std::unique_ptr<TIntQueueClass> IntQueueAsyncGets;
         std::unique_ptr<TIntQueueClass> IntQueueFastGets;
         std::unique_ptr<TIntQueueClass> IntQueueDiscover;
