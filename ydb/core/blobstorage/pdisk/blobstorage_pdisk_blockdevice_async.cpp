@@ -53,11 +53,8 @@ class TRealBlockDevice : public IBlockDevice {
 
         void *ThreadProc() override {
             SetCurrentThreadName(Name.data());
-            auto prevCycleEnd = HPNow();
             bool isWorking = true;
             bool stateError = false;
-
-            auto cpuCounter = Device.Mon.PDiskGroup->GetCounter(Name + "CPU", true);
 
             while(isWorking) {
                 TAtomicBase actionCount = Queue.GetWaitingSize();
@@ -84,15 +81,8 @@ class TRealBlockDevice : public IBlockDevice {
                         }
                     }
                 } else {
-                    *cpuCounter = ThreadCPUTime();
                     Queue.ProducedWaitI();
                 }
-
-                const auto cycleEnd = HPNow();
-                if (actionCount > 0) {
-                    *Device.Mon.DeviceCompletionThreadBusyTimeNs += HPNanoSeconds(cycleEnd - prevCycleEnd);
-                }
-                prevCycleEnd = cycleEnd;
             }
             return nullptr;
         }
