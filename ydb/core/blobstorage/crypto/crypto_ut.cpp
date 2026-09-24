@@ -83,6 +83,32 @@ Y_UNIT_TEST_SUITE(TBlobStorageCrypto) {
         }
     }
 
+    Y_UNIT_TEST(TestStreamCypherKeyChangeAfterMessageReuse) {
+        constexpr size_t SIZE = 256;
+        alignas(16) ui8 plaintext[SIZE] = {};
+        alignas(16) ui8 reusedOutput[SIZE];
+        alignas(16) ui8 freshOutput[SIZE];
+
+        TStreamCypher reusedCypher;
+        reusedCypher.SetKey(1);
+        reusedCypher.StartMessage(1, 0);
+        reusedCypher.Encrypt(reusedOutput, plaintext, SIZE);
+
+        reusedCypher.StartMessage(2, 0);
+        reusedCypher.Encrypt(reusedOutput, plaintext, SIZE);
+
+        reusedCypher.SetKey(2);
+        reusedCypher.StartMessage(3, 0);
+        reusedCypher.Encrypt(reusedOutput, plaintext, SIZE);
+
+        TStreamCypher freshCypher;
+        freshCypher.SetKey(2);
+        freshCypher.StartMessage(3, 0);
+        freshCypher.Encrypt(freshOutput, plaintext, SIZE);
+
+        UNIT_ASSERT_ARRAYS_EQUAL(reusedOutput, freshOutput, SIZE);
+    }
+
     Y_UNIT_TEST(TestInplaceStreamCypher) {
         TStreamCypher cypher1;
         TStreamCypher cypher2;

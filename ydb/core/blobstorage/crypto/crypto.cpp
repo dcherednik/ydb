@@ -178,14 +178,18 @@ Y_FORCE_INLINE void TStreamCypher::Encipher(const ui8* plaintext, ui8* ciphertex
 
 Y_FORCE_INLINE void TStreamCypher::SetKeyAndIV(const ui64 blockIdx) {
     std::visit([&](auto&& chacha) {
-        chacha.SetKey((ui8*)&Key[0], sizeof(Key));
+        if (KeyChanged) {
+            chacha.SetKey((ui8*)&Key[0], sizeof(Key));
+        }
         chacha.SetIV((ui8*)&Nonce, (ui8*)&blockIdx);
     }, Cypher);
+    KeyChanged = false;
 }
 
 TStreamCypher::TStreamCypher()
     : Nonce(0)
     , UnusedBytes(0)
+    , KeyChanged(true)
 {
 #if ENABLE_ENCRYPTION
     memset(Key, 0, sizeof(Key));
@@ -210,6 +214,7 @@ void TStreamCypher::SetKey(const ui64 &key) {
     Key[1] = key;
     Key[2] = key;
     Key[3] = key;
+    KeyChanged = true;
 #else
     Y_UNUSED(key);
 #endif
@@ -225,6 +230,7 @@ void TStreamCypher::SetKey(const ui8 *key, ui32 sizeBytes) {
         memcpy(key8 + offset, key, size);
         offset += size;
     }
+    KeyChanged = true;
 #else
     Y_UNUSED(key);
     Y_UNUSED(sizeBytes);
@@ -474,4 +480,3 @@ TStreamCypher::~TStreamCypher() {
 }
 
 } // NKikimr
-

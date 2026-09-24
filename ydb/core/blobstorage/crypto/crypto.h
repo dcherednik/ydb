@@ -106,6 +106,7 @@ private:
     alignas(16) i64 Nonce;
     std::variant<ChaChaVec, ChaCha512> Cypher;
     ui32 UnusedBytes;
+    bool KeyChanged;
 public:
     TStreamCypher();
     void SetKey(const ui64 &key);
@@ -125,4 +126,3 @@ private:
 };
 
 } // NKikimr
-

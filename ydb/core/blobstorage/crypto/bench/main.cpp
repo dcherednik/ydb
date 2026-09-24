@@ -120,6 +120,25 @@ void RunDecryptBenchmark(NBench::NCpu::TParams& iface) {
             DESTINATION_SHIFT, STREAMING>(iface);                                         \
     }
 
+Y_CPU_BENCHMARK(Hot_StartMessage_CachedKey, iface) {
+    NKikimr::TStreamCypher cypher;
+    cypher.SetKey(123);
+    cypher.StartMessage(0, 0);
+    for (size_t i = 0; i < iface.Iterations(); ++i) {
+        cypher.StartMessage(i + 1, 0);
+        NBench::Clobber();
+    }
+}
+
+Y_CPU_BENCHMARK(Hot_StartMessage_ReloadKey, iface) {
+    NKikimr::TStreamCypher cypher;
+    for (size_t i = 0; i < iface.Iterations(); ++i) {
+        cypher.SetKey(123);
+        cypher.StartMessage(i + 1, 0);
+        NBench::Clobber();
+    }
+}
+
 // Full sector payload. The unaligned destination triggers the expensive branch in the current implementation.
 DEFINE_BENCHMARK(Hot_Full_Aligned_Legacy, LegacyInplaceAndCopy, 0, SectorPayloadSize, 0, false)
 DEFINE_BENCHMARK(Hot_Full_Aligned_Current, CurrentDirectDestination, 0, SectorPayloadSize, 0, false)
