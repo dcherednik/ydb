@@ -235,13 +235,9 @@ void TCompletionChunkReadPart::UnencryptData(TActorSystem *actorSystem) {
                 memset(Destination, 0, sectorPayloadSize);
             } else {
                 cypher.StartMessage(footer->Nonce);
-                if (sectorOffset > 0 || intptr_t(Destination) % 32) {
+                if (sectorOffset > 0) {
                     cypher.InplaceEncrypt(source, sectorOffset + sectorPayloadSize);
-                    if (CommonBufferOffset == 0 || !IsTheLastPart) {
-                        memcpy(Destination, source + sectorOffset, sectorPayloadSize);
-                    } else {
-                        memcpy(Destination, source, sectorPayloadSize);
-                    }
+                    memcpy(Destination, source + sectorOffset, sectorPayloadSize);
                 } else {
                     cypher.Encrypt(Destination, source, sectorPayloadSize);
                 }

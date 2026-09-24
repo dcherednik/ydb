@@ -30,6 +30,7 @@ PEERDIR(
 END()
 
 RECURSE(
+    bench
     chacha_512
 )
 

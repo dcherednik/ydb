@@ -1406,6 +1406,16 @@ Y_UNIT_TEST_SUITE(TPDiskTest) {
                 Cerr << TString(x.data(), x.size()).Quote() << Endl;
             }
             UNIT_ASSERT(ConvertIPartsToString(parts.Get()) == res->Data.ToString().Slice());
+
+            if (size > 123) {
+                constexpr ui32 readShift = 123;
+                const TString expected = ConvertIPartsToString(parts.Get()).substr(readShift);
+                auto unalignedRes = testCtx.TestResponse<NPDisk::TEvChunkReadResult>(
+                    new NPDisk::TEvChunkRead(vdisk.PDiskParams->Owner, vdisk.PDiskParams->OwnerRound,
+                        reservedChunk, offset + readShift, size - readShift, 0, 0),
+                    NKikimrProto::OK);
+                UNIT_ASSERT(expected == unalignedRes->Data.ToString().Slice());
+            }
         }
     }
 
