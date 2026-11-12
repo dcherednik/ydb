@@ -296,6 +296,7 @@ namespace NActors {
     template<bool External>
     bool TEventOutputChannel::SerializeEvent(TTcpPacketOutTask& task, TEventHolder& event, bool disableChecksums, size_t *bytesSerialized) {
         const bool useRdmaForMainChannelPacket = !External && task.UsePreallocatedInternalStream;
+        ui32* const zcTransferId = External ? &event.ZcTransferId : nullptr;
         auto addChunk = [&](const void *data, size_t len, bool allowCopy, const NInterconnect::NRdma::TMemRegion* memRegion = nullptr) {
             event.UpdateChecksum(data, len);
             if (useRdmaForMainChannelPacket) {
@@ -304,13 +305,13 @@ namespace NActors {
                 } else if (allowCopy) {
                     task.Write<External>(data, len);
                 } else {
-                    task.Append<External>(data, len, &event.ZcTransferId, disableChecksums);
+                    task.Append<External>(data, len, zcTransferId, disableChecksums);
                 }
             } else {
                 if (allowCopy && (reinterpret_cast<uintptr_t>(data) & 63) + len <= 64) {
                     task.Write<External>(data, len);
                 } else {
-                    task.Append<External>(data, len, &event.ZcTransferId, disableChecksums);
+                    task.Append<External>(data, len, zcTransferId, disableChecksums);
                 }
             }
             *bytesSerialized += len;
