@@ -458,9 +458,20 @@ namespace NActors {
         struct TEvCheckSubscriberLiveness
             : TEventLocal<TEvCheckSubscriberLiveness, EvCheckSubscriberLiveness> {};
 
+        enum class ERamKind : ui8 {
+            ActorBatch,
+            CpuContinuation,
+            NagleDeadline,
+        };
+
         struct TEvRam : TEventLocal<TEvRam, EvRam> {
-            const bool Batching;
-            TEvRam(bool batching) : Batching(batching) {}
+            const ERamKind Kind;
+            const bool Delayed;
+
+            TEvRam(ERamKind kind, bool delayed)
+                : Kind(kind)
+                , Delayed(delayed)
+            {}
         };
 
         struct TEvTerminate : TEventLocal<TEvTerminate, EvTerminate> {
@@ -482,6 +493,9 @@ namespace NActors {
         ui64 OutOfBandBytesSent = 0;
         ui64 CpuStarvationEvents = 0;
         ui64 CpuStarvationEventsOnWriteData = 0;
+        ui64 AppLevelNagleDeadlineScheduled = 0;
+        ui64 AppLevelNagleDeadlineFired = 0;
+        ui64 AppLevelNagleFullBatchWakeups = 0;
 
     public:
         static constexpr EActivityType ActorActivityType() {
@@ -595,10 +609,13 @@ namespace NActors {
 
         TEvRam* RamInQueue = nullptr;
         ui64 RamStartedCycles = 0;
-        void IssueRam(bool batching);
+        void IssueRam(ERamKind kind, bool forceImmediate = false);
+        void ScheduleTrafficGenerationAfterEnqueue();
         void HandleRam(TEvRam::TPtr& ev);
         void GenerateTraffic();
         void ProducePackets();
+
+        static constexpr ui32 MaxBytesToProduce = 64 * 1024;
 
         size_t GetUnsentSize() const {
             return OutgoingStream.CalculateUnsentSize() + OutOfBandStream.CalculateUnsentSize() +

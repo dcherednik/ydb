@@ -959,6 +959,71 @@ void RunTcpEmptyProtoRecordWithPayloadRoundTrip(bool enableExternalDataChannel) 
     }
 }
 
+void RunAppLevelNagleDeadlineBatchesOnce() {
+    constexpr size_t burstSize = 100;
+    constexpr size_t payloadSize = 128;
+
+    auto settingsCustomizer = [](ui32, TInterconnectSettings& settings) {
+        settings.EnableAppLevelNagle = true;
+        settings.AppLevelNagleTimeout = TDuration::MilliSeconds(200);
+        settings.ForceConfirmPeriod = TDuration::Max();
+        settings.PingPeriod = TDuration::Zero();
+    };
+
+    TTestICCluster cluster(2, TChannelsConfig(), nullptr, nullptr, TTestICCluster::DISABLE_RDMA,
+        {}, TDuration::Seconds(30), TNode::DefaultInflight(), settingsCustomizer);
+
+    auto* recipientPtr = new TDropRecipientActor;
+    const TActorId recipient = cluster.RegisterActor(recipientPtr, 1);
+
+    cluster.RegisterActor(new TBurstSenderActor(recipient, 1, payloadSize), 2);
+    WaitForCondition(TDuration::Seconds(10), [&] {
+        return recipientPtr->GetReceived() == 1;
+    }, "initial packet delivery before app-level Nagle batching");
+
+    UNIT_ASSERT_VALUES_EQUAL(WaitForSessionCounter(cluster, 2, 1, "AppLevelNagleDeadlineScheduled"), 0ULL);
+
+    cluster.RegisterActor(new TBurstSenderActor(recipient, burstSize, payloadSize), 2);
+    WaitForCondition(TDuration::Seconds(10), [&] {
+        return recipientPtr->GetReceived() == burstSize + 1;
+    }, "app-level Nagle deadline delivery");
+
+    UNIT_ASSERT_VALUES_EQUAL(WaitForSessionCounter(cluster, 2, 1, "AppLevelNagleDeadlineScheduled"), 1ULL);
+    UNIT_ASSERT_VALUES_EQUAL(WaitForSessionCounter(cluster, 2, 1, "AppLevelNagleDeadlineFired"), 1ULL);
+}
+
+void RunAppLevelNagleFullBatchPreemptsDeadline() {
+    constexpr size_t burstSize = 80;
+    constexpr size_t payloadSize = 1024;
+
+    auto settingsCustomizer = [](ui32, TInterconnectSettings& settings) {
+        settings.EnableAppLevelNagle = true;
+        settings.AppLevelNagleTimeout = TDuration::Seconds(5);
+        settings.ForceConfirmPeriod = TDuration::Max();
+        settings.PingPeriod = TDuration::Zero();
+    };
+
+    TTestICCluster cluster(2, TChannelsConfig(), nullptr, nullptr, TTestICCluster::DISABLE_RDMA,
+        {}, TDuration::Seconds(30), TNode::DefaultInflight(), settingsCustomizer);
+
+    auto* recipientPtr = new TDropRecipientActor;
+    const TActorId recipient = cluster.RegisterActor(recipientPtr, 1);
+
+    cluster.RegisterActor(new TBurstSenderActor(recipient, 1, payloadSize), 2);
+    WaitForCondition(TDuration::Seconds(10), [&] {
+        return recipientPtr->GetReceived() == 1;
+    }, "initial packet delivery before full app-level Nagle batch");
+
+    cluster.RegisterActor(new TBurstSenderActor(recipient, burstSize, payloadSize), 2);
+    WaitForCondition(TDuration::Seconds(10), [&] {
+        return recipientPtr->GetReceived() == burstSize + 1;
+    }, "full app-level Nagle batch delivery");
+
+    UNIT_ASSERT_VALUES_EQUAL(WaitForSessionCounter(cluster, 2, 1, "AppLevelNagleDeadlineScheduled"), 1ULL);
+    UNIT_ASSERT_VALUES_EQUAL(WaitForSessionCounter(cluster, 2, 1, "AppLevelNagleDeadlineFired"), 0ULL);
+    UNIT_ASSERT_VALUES_EQUAL(WaitForSessionCounter(cluster, 2, 1, "AppLevelNagleFullBatchWakeups"), 1ULL);
+}
+
 ui64 MeasureIdleGeneratedPackets(bool enableKernelLiveness, bool withRdma) {
     auto settingsCustomizer = [enableKernelLiveness](ui32, TInterconnectSettings& settings) {
         settings.EnableKernelLiveness = enableKernelLiveness;
@@ -1362,6 +1427,14 @@ void RunSubscriberLivenessCheck(bool useSessionV2, TDuration checkInterval) {
 } // namespace
 
 Y_UNIT_TEST_SUITE(Interconnect) {
+
+    Y_UNIT_TEST(AppLevelNagleDeadlineBatchesOnce) {
+        RunAppLevelNagleDeadlineBatchesOnce();
+    }
+
+    Y_UNIT_TEST(AppLevelNagleFullBatchPreemptsDeadline) {
+        RunAppLevelNagleFullBatchPreemptsDeadline();
+    }
 
     Y_UNIT_TEST(ProcessUndeliveredAfterOversizedTcpEvent) {
         TTestICCluster cluster(2, TChannelsConfig(), nullptr, nullptr, TTestICCluster::DISABLE_RDMA);

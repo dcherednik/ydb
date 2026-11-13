@@ -495,6 +495,11 @@ static TInterconnectSettings GetInterconnectSettings(const NKikimrConfig::TInter
         result.BatchPeriod = TDuration();
     }
 
+    result.EnableAppLevelNagle = config.GetEnableAppLevelNagle();
+    if (config.HasAppLevelNagleTimeoutDuration()) {
+        result.AppLevelNagleTimeout = DurationFromProto(config.GetAppLevelNagleTimeoutDuration());
+    }
+
     result.BindOnAllAddresses = config.GetBindOnAllAddresses();
 
     auto readFile = [](std::optional<TString> value, std::optional<TString> path, const char *name) {

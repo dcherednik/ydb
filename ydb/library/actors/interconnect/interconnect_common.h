@@ -81,6 +81,8 @@ namespace NActors {
         TDuration ForceConfirmPeriod = TDuration::Seconds(1);
         TDuration LostConnection;
         TDuration BatchPeriod;
+        bool EnableAppLevelNagle = false;
+        TDuration AppLevelNagleTimeout = TDuration::MilliSeconds(1);
         bool BindOnAllAddresses = true;
         EEncryptionMode EncryptionMode = EEncryptionMode::DISABLED;
         bool TlsAuthOnly = false;

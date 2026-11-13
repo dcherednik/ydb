@@ -404,7 +404,7 @@ namespace NActors {
             }
         }
 
-        IssueRam(true);
+        ScheduleTrafficGenerationAfterEnqueue();
     }
 
     void TInterconnectSessionTCP::Forward(STATEFN_SIG) {
@@ -720,14 +720,28 @@ namespace NActors {
         }
     }
 
-    void TInterconnectSessionTCP::IssueRam(bool batching) {
-        const auto& batchPeriod = Proxy->Common->Settings.BatchPeriod;
-        if (!RamInQueue || (!batching && RamInQueue->Batching && batchPeriod != TDuration())) {
-            auto ev = std::make_unique<TEvRam>(batching);
+    void TInterconnectSessionTCP::IssueRam(ERamKind kind, bool forceImmediate) {
+        TDuration delay;
+        if (forceImmediate || kind == ERamKind::CpuContinuation) {
+            delay = TDuration::Zero();
+        } else if (kind == ERamKind::NagleDeadline) {
+            delay = Proxy->Common->Settings.AppLevelNagleTimeout;
+        } else {
+            delay = Proxy->Common->Settings.BatchPeriod;
+        }
+        const bool delayed = delay != TDuration::Zero();
+
+        if (!RamInQueue || (!delayed && RamInQueue->Delayed)) {
+            auto ev = std::make_unique<TEvRam>(kind, delayed);
             RamInQueue = ev.get();
             auto handle = std::make_unique<IEventHandle>(SelfId(), SelfId(), ev.release());
-            if (batching && batchPeriod != TDuration()) {
-                TActivationContext::Schedule(batchPeriod, handle.release());
+            if (kind == ERamKind::NagleDeadline) {
+                ++AppLevelNagleDeadlineScheduled;
+            } else if (forceImmediate) {
+                ++AppLevelNagleFullBatchWakeups;
+            }
+            if (delayed) {
+                TActivationContext::Schedule(delay, handle.release());
             } else {
                 TActivationContext::Send(handle.release());
             }
@@ -736,8 +750,27 @@ namespace NActors {
         }
     }
 
+    void TInterconnectSessionTCP::ScheduleTrafficGenerationAfterEnqueue() {
+        const auto& settings = Proxy->Common->Settings;
+        if (!settings.EnableAppLevelNagle) {
+            IssueRam(ERamKind::ActorBatch);
+            return;
+        }
+
+        if (TotalOutputQueueSize >= MaxBytesToProduce) {
+            IssueRam(ERamKind::ActorBatch, true);
+        } else if (OutgoingIndex && LastConfirmed < OutputCounter) {
+            IssueRam(ERamKind::NagleDeadline);
+        } else {
+            IssueRam(ERamKind::ActorBatch);
+        }
+    }
+
     void TInterconnectSessionTCP::HandleRam(TEvRam::TPtr& ev) {
         if (ev->Get() == RamInQueue) {
+            if (ev->Get()->Kind == ERamKind::NagleDeadline) {
+                ++AppLevelNagleDeadlineFired;
+            }
             LWPROBE(FinishRam, Proxy->PeerNodeId, NHPTimer::GetSeconds(GetCycleCountFast() - ev->SendTime) * 1000.0);
             RamInQueue = nullptr;
             GenerateTraffic();
@@ -745,6 +778,10 @@ namespace NActors {
     }
 
     void TInterconnectSessionTCP::GenerateTraffic() {
+        if (RamInQueue && RamInQueue->Kind == ERamKind::NagleDeadline) {
+            RamInQueue = nullptr;
+        }
+
         if (!TimeLimit) {
             TimeLimit.emplace(GetMaxCyclesPerEvent());
         }
@@ -797,7 +834,7 @@ namespace NActors {
                 break;
             } else if (TimeLimit->CheckExceeded()) {
                 SetEnoughCpu(++StarvingInRow < StarvingInRowForNotEnoughCpu);
-                IssueRam(false);
+                IssueRam(ERamKind::CpuContinuation);
                 notEnoughCpu = true;
                 break;
             }
@@ -820,14 +857,13 @@ namespace NActors {
         // first, we create as many data packets as we can generate under certain conditions; they include presence
         // of events in channels queues and in flight fitting into requested limit; after we hit one of these conditions
         // we exit cycle
-        static constexpr ui32 maxBytesToProduce = 64 * 1024;
         ui32 bytesProduced = 0;
         // Give more chanse to send XDC command via regular channel after RDMA region preparation.
         // It reduces rdma memory usage and latency but in theory may also decrease effecincy of regular tcp channel in case of mixed RDMA + TCP traffic
         // TODO (dcherednik): recheck impact on the huge clusters
         const ui64 rdmaBytesToProduce = RdmaInflightDataAmount;
         while (NumEventsInQueue &&  (InflightDataAmount + RdmaInflightDataAmount) < GetTotalInflightAmountOfData() && GetUnsentSize() < GetUnsentLimit()) {
-            if ((bytesProduced && TimeLimit->CheckExceeded()) || bytesProduced >= maxBytesToProduce || RdmaInflightDataAmount > rdmaBytesToProduce) {
+            if ((bytesProduced && TimeLimit->CheckExceeded()) || bytesProduced >= MaxBytesToProduce || RdmaInflightDataAmount > rdmaBytesToProduce) {
                 break;
             }
             try {
@@ -1869,6 +1905,9 @@ namespace NActors {
 
                             MON_VAR(CpuStarvationEvents)
                             MON_VAR(CpuStarvationEventsOnWriteData)
+                            MON_VAR(AppLevelNagleDeadlineScheduled)
+                            MON_VAR(AppLevelNagleDeadlineFired)
+                            MON_VAR(AppLevelNagleFullBatchWakeups)
 
                             UpdateState();
 

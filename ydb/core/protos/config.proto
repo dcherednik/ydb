@@ -657,6 +657,8 @@ message TInterconnectConfig {
     optional NKikimrConfigUnits.TDuration ForceConfirmPeriodDuration = 27;
     optional NKikimrConfigUnits.TDuration LostConnectionDuration = 28;
     optional NKikimrConfigUnits.TDuration BatchPeriodDuration = 29;
+    optional bool EnableAppLevelNagle = 71 [default = false];
+    optional NKikimrConfigUnits.TDuration AppLevelNagleTimeoutDuration = 72;
 
     optional NKikimrConfigUnits.TDuration FirstErrorSleep = 46;
     optional NKikimrConfigUnits.TDuration MaxErrorSleep = 47;
